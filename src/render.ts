@@ -1,7 +1,8 @@
 // 分组表格渲染：全英文文案、纯空格对齐、无装饰线
+// 价格行只读 ModelGroup.pricing（入口结算时带来），渲染层不感知 provider
 
 import type { DayRow, ModelGroup, Source } from "./types";
-import { SOURCE_PROVIDER, resolveModel } from "./pricing";
+import type { ModelPricing } from "./pricing";
 
 const HEADERS = ["Date", "Input", "Output", "Cache", "Cache%", "Cost", "Per 1M", "TTFT", "Speed"] as const;
 /** Date 左对齐，其余右对齐 */
@@ -37,14 +38,13 @@ function joinRow(cells: readonly string[], widths: readonly number[]): string {
     .trimEnd();
 }
 
-/** 组头下的价格行：单位 元 / 百万 token；查不到价显示 — */
-function priceLine(source: Source, model: string): string {
-  const p = resolveModel(SOURCE_PROVIDER[source], model);
-  if (!p) return "price: —";
+/** 组头下的价格行：单位 元 / 百万 token；未知模型（入口未取到价）显示 — */
+function priceLine(pricing: ModelPricing | undefined): string {
+  if (!pricing) return "price: —";
   return (
-    `price: in miss ¥${p.input_cache_miss.toFixed(2)}` +
-    ` / hit ¥${p.input_cache_hit.toFixed(2)}` +
-    ` / out ¥${p.output.toFixed(2)} per 1M tok`
+    `price: in miss ¥${pricing.input_cache_miss.toFixed(2)}` +
+    ` / hit ¥${pricing.input_cache_hit.toFixed(2)}` +
+    ` / out ¥${pricing.output.toFixed(2)} per 1M tok`
   );
 }
 
@@ -59,7 +59,7 @@ export function render(groups: readonly ModelGroup[], source: Source): string {
   groups.forEach((g, gi) => {
     if (gi > 0) lines.push("");
     lines.push(`${source} · ${g.model}`);
-    lines.push(priceLine(source, g.model));
+    lines.push(priceLine(g.pricing));
     lines.push("");
 
     const rows: string[][] = [];

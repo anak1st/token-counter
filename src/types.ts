@@ -1,5 +1,7 @@
 // 归一化事件与聚合的类型定义
 
+import type { ModelPricing } from "./pricing";
+
 export type Source = "mimo" | "dsh";
 
 export interface Usage {
@@ -19,6 +21,8 @@ export interface UsageEvent {
   usage: Usage;
   /** 入口已结算的人民币费用 */
   cost: number;
+  /** 入口结算时所用的价格（未知模型为 undefined）；随事件流转，下游只读 */
+  pricing?: ModelPricing;
   /** 首 token 延迟样本（毫秒） */
   ttftMs?: number;
   /** 该样本所属的生成耗时（毫秒） */
@@ -48,6 +52,8 @@ export interface DayRow {
 
 export interface ModelGroup {
   model: string;
+  /** 该模型结算用的价格（组内事件共享），供渲染展示 */
+  pricing?: ModelPricing;
   days: DayRow[];
   total: DayRow;
 }

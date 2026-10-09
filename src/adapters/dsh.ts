@@ -58,6 +58,7 @@ function buildEvent(
     ts,
     usage,
     cost,
+    ...(pricing && { pricing }),
   };
 }
 

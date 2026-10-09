@@ -1,6 +1,7 @@
 // 内存聚合：按 (模型, 本地日期) 分桶
 
 import type { DayRow, ModelGroup, UsageEvent } from "./types";
+import type { ModelPricing } from "./pricing";
 import { dayKey } from "./time";
 
 function emptyRow(date: string): DayRow {
@@ -32,12 +33,15 @@ function fold(target: DayRow, row: DayRow): void {
 
 export function aggregate(events: Iterable<UsageEvent>): ModelGroup[] {
   const byModel = new Map<string, Map<string, DayRow>>();
+  // 同一模型的事件共享同一份入口结算价格，取首个事件的即可
+  const pricingByModel = new Map<string, ModelPricing | undefined>();
 
   for (const e of events) {
     let days = byModel.get(e.model);
     if (!days) {
       days = new Map();
       byModel.set(e.model, days);
+      pricingByModel.set(e.model, e.pricing);
     }
     const key = dayKey(e.ts);
     let row = days.get(key);
@@ -63,7 +67,7 @@ export function aggregate(events: Iterable<UsageEvent>): ModelGroup[] {
     const sorted = [...days.values()].sort((a, b) => a.date.localeCompare(b.date));
     const total = emptyRow("total");
     for (const row of sorted) fold(total, row);
-    groups.push({ model, days: sorted, total });
+    groups.push({ model, pricing: pricingByModel.get(model), days: sorted, total });
   }
   return groups;
 }

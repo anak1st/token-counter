@@ -119,6 +119,7 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
         ts,
         usage,
         cost,
+        ...(pricing && { pricing }),
         ...(ttft !== undefined && { ttftMs: ttft }),
         ...(completed !== undefined && completed > ts && { durationMs: completed - ts }),
       };

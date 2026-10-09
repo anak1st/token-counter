@@ -24,12 +24,6 @@ export interface PricingTable {
   providers: Readonly<Record<string, ProviderPricing>>;
 }
 
-/** 数据源 → 价格表 provider 键 */
-export const SOURCE_PROVIDER: Readonly<Record<"mimo" | "dsh", string>> = {
-  mimo: "xiaomi",
-  dsh: "deepseek",
-};
-
 /** 按 provider + 模型名查价，先精确匹配再走 aliases 归一 */
 export function resolveModel(provider: string, model: string): ModelPricing | undefined {
   const p = PRICING.providers[provider];

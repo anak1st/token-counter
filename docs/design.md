@@ -66,13 +66,13 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
  │ mimo: SQL 按时间过滤               │
  │ dsh:  解压 zstd → 按版本解析        │
  └──────────────┬────────────────────┘
-                │  归一化事件（惰性迭代，携带已结算 cost）
+                │  归一化事件（惰性迭代，携带已结算 cost 与所用 pricing）
                 ▼
        内存聚合：按 (模型, 本地日期) 双键分桶
        Map<model, Map<day, {input, output, cache_*, cost, ttft_samples, durations}>>
-                │
+                │  pricing 挂到 ModelGroup（组内共享）
                 ▼
-       每模型一组：补算百分比与速度 → 格式化表格输出（见 §6）
+       每模型一组：补算百分比与速度 → 格式化表格输出（价格行只读 group.pricing，见 §6）
 ```
 
 一次查询 = 解析参数 → 跑一个 adapter → 内存里聚合 → 按模型分组打印。**没有中间落盘，没有需要同步的状态。**
@@ -83,10 +83,10 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 
 整个系统唯一流通的数据结构：
 
-`source, session, project, model, ts, usage{input, output, reasoning, cache_read, cache_write}, cost, 起止时间戳`
+`source, session, project, model, ts, usage{input, output, reasoning, cache_read, cache_write}, cost, pricing, 起止时间戳`
 
 - 用量维度源里没有就缺省（dsh 旧格式无 reasoning），**不编造**
-- **cost 在入口一次结算**：两源统一查 `src/pricing.ts` 的**人民币单价** × token 数——mimo 源 cost 是美元，不采信、不换汇（见 mimo.md「cost 字段实测」）；dsh 本身无 cost。模型名先过 aliases 归一
+- **cost 与 pricing 在入口一次结算、一次取定**：两源统一查 `src/pricing.ts` 的**人民币单价** × token 数——mimo 源 cost 是美元，不采信、不换汇（见 mimo.md「cost 字段实测」）；dsh 本身无 cost。模型名先过 aliases 归一。结算用的 `pricing` 对象随事件携带 → 聚合挂到 `ModelGroup` → 渲染的价格行只读展示。**下游任何环节不再二次查价**，也不感知 provider 概念（source→provider 的映射只存在于各 adapter 内部）
 - **速度存原料不存派生值**：事件带起止时间戳或所属 step 边界，TTFT / tokens/s 在聚合期按当次查询的口径计算——口径以后想改，改一处聚合逻辑即可
 
 ### 4.2 Adapter
