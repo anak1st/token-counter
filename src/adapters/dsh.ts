@@ -1,6 +1,6 @@
 // dsh adapter：扫描 ~/.dsh/sessions 下的 zstd JSONL 事件流
-// 格式分流：session 首行 version >= 3 → assistant/message 的 data.usage；
-//           version 0（旧格式）→ assistant/chunk 的 data.chunk.type=="usage"
+// 只解析最新格式（*.v4.jsonl.zstd）：usage 在 assistant/message 的 data.usage；
+// 旧格式（session.jsonl.zstd / .v3.）静默跳过，不解析不告警。
 // 速度原料：step/start → 首个 usage 事件 = TTFT；step/end - step/start = 生成耗时
 
 import { readdirSync, statSync } from "node:fs";
@@ -16,7 +16,6 @@ interface StepState {
 }
 
 interface FileState {
-  version: number;
   sessionId: string;
   model: string;
   steps: Map<string, StepState>;
@@ -109,7 +108,6 @@ function processLine(
 
   switch (ev.type) {
     case "session":
-      if (typeof ev.version === "number") state.version = ev.version;
       if (typeof ev.id === "string") state.sessionId = ev.id;
       return;
     case "request/context": {
@@ -141,17 +139,10 @@ function processLine(
       break;
   }
 
-  // usage 事件
+  // usage 事件（v4：assistant/message.data.usage）
   let u: Record<string, unknown> | undefined;
-  if (state.version >= 3) {
-    if (ev.type === "assistant/message") {
-      u = (ev.data as { usage?: Record<string, unknown> } | undefined)?.usage;
-    }
-  } else if (
-    ev.type === "assistant/chunk" &&
-    (ev.data as { chunk?: { type?: string } } | undefined)?.chunk?.type === "usage"
-  ) {
-    u = (ev.data as { chunk?: { usage?: Record<string, unknown> } } | undefined)?.chunk?.usage;
+  if (ev.type === "assistant/message") {
+    u = (ev.data as { usage?: Record<string, unknown> } | undefined)?.usage;
   }
   if (!u || typeof ev.time !== "number") return;
   if (ev.time < range.start || ev.time >= range.end) return;
@@ -182,7 +173,6 @@ async function* scanFile(path: string, filename: string, range: DateRange): Asyn
   }
 
   const state: FileState = {
-    version: filename.includes(".v4.") ? 4 : filename.includes(".v3.") ? 3 : 0,
     sessionId: filename,
     model: "unknown",
     steps: new Map(),
@@ -244,7 +234,8 @@ export async function* scanDsh(range: DateRange): AsyncGenerator<UsageEvent> {
         continue;
       }
       for (const f of files) {
-        if (!f.endsWith(".jsonl.zstd")) continue;
+        // 只读最新格式（v4）；旧格式静默跳过
+        if (!f.endsWith(".v4.jsonl.zstd")) continue;
         const path = join(dir, f);
         try {
           // 事件时间不可能晚于文件最后写入时间，剪掉明显不相交的文件

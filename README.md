@@ -23,8 +23,9 @@ token-counter mimo --from 2026-10-01 --to 2026-10-08
 ## 文档
 
 - **[docs/design.md](docs/design.md)** — 设计文档：数据流、归一化事件、日期/速度口径、无存储的取舍
+- **[docs/thinking.md](docs/thinking.md)** — 思考强度（overthinking）专题分析：外部研究、本地可行性、估算实验；**结论暂不实现**
 - **[docs/mimo.md](docs/mimo.md)** — mimo 数据源探索：SQLite 表结构、消息样例、注意事项（message/part 双视角勿双计；cost 字段是美元不采信；历史数据仅近期）
-- **[docs/dsh.md](docs/dsh.md)** — dsh 数据源探索：zstd JSONL 三种格式、会话级聚合缓存 `session_projcache`；desk 桌面版与 CLI 共用 `~/.dsh/sessions/`
+- **[docs/dsh.md](docs/dsh.md)** — dsh 数据源探索：zstd JSONL 事件流（**adapter 只解析 v4**，legacy 静默跳过）、会话级聚合缓存 `session_projcache`；desk 桌面版与 CLI 共用 `~/.dsh/sessions/`
 
 ## 技术选型
 

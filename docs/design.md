@@ -46,7 +46,7 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 |---|---|---|---|
 | 1 | 两源形态迥异：活的 SQLite vs zstd 压缩事件流 | mimo / dsh | adapter 层隔离差异，核心只认归一化事件 |
 | 2 | mimo 的 cost 字段是美元（官方海外价，实测拟合），dsh 没有 cost | 两侧 | 两源一律查 `pricing.ts` 人民币价在入口结算，不采信源 cost、不做汇率换算 |
-| 3 | dsh 三种事件格式版本，usage 字段各异 | docs/dsh.md | adapter 内按版本分流，对外同一种事件 |
+| 3 | dsh 历史上有三种格式，仅 v4 在持续写入 | docs/dsh.md | adapter 只解析 v4，旧格式静默跳过（2026-10-09 决定） |
 | 4 | 同一事实存在双视角（mimo 的 message vs part；dsh 事件流 vs 聚合缓存） | 两侧 | 每源指定唯一主源，只从一处取数 |
 | 5 | 数据源必须只读：mimo 是 WAL 活库，dsh 正被 desk 写入 | 两侧 | 只读打开，写操作不存在（连本地库都没有） |
 | 6 | dsh 的 zstd 整流压缩，无法只读尾部 | docs/dsh.md | 查询期内全量解压（文件均 <1 MB，可接受） |
