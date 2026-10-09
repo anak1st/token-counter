@@ -15,6 +15,7 @@ token-counter mimo --from 2026-10-01 --to 2026-10-08
 
 - **token 用量**：输入 / 输出 / 缓存，及各分项当日占比
 - **费用**：按天累计，一律按 `src/pricing.ts` 人民币价 × token 直接计（mimo 源 cost 是美元不采信、不换汇；dsh 源无 cost）
+- **性价比**：`Per 1M` 列 = 当日总费用 ÷ 当日总 token × 10⁶（混合有效单价，¥/百万 token）
 - **速度**：首 token 延迟（TTFT）、平均输出速度（tokens/s）
 
 输出为对齐的纯文本表格——排版清晰即可，不画装饰线；**文案全英文**（中文双字节不利对齐），费用用人民币 `¥`（格式约定见 [design §6](docs/design.md)）。
@@ -35,9 +36,12 @@ token-counter mimo --from 2026-10-01 --to 2026-10-08
 ## 命令
 
 ```bash
-bun run dev         # watch 模式
-bun run start       # 运行
 bun run typecheck   # tsc --noEmit
+
+# 查询（也可 bun run start -- <args>）
+bun src/index.ts dsh --last 7
+bun src/index.ts mimo --from 2026-10-01 --to 2026-10-08
+bun src/index.ts --help
 ```
 
 ## MVP 范围
@@ -49,6 +53,6 @@ bun run typecheck   # tsc --noEmit
 ## 开工清单
 
 - [ ] 确认 mimo 历史数据的真实位置（当前库仅 2026-10-08 起的 3 个 session）
-- [ ] 确认 dsh 文件名版本（`.v3`/`.v4`）与首行 `session.version` 的对应关系
-- [ ] 定归一化事件类型 + 速度口径（mimo TTFT 为 step 级近似，见 design §6）
-- [ ] 实现 mimo adapter → dsh adapter → 聚合与输出
+- [x] 确认 dsh 文件名版本与首行 `session.version` 的对应关系（实测：旧文件名 ↔ version 0，`.v3`/`.v4` ↔ 3/4；以内容 version 字段为准）
+- [x] 定归一化事件类型 + 速度口径（mimo TTFT 为 step 级近似，见 design §7）
+- [x] 实现 mimo adapter → dsh adapter → 聚合与输出（已用真数据对账：mimo/dsh 新旧格式均与独立脚本一致）
