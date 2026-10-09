@@ -1,7 +1,6 @@
 // 价格表（内置常量，单位：元 / 百万 token，人民币）
-// 规则：不区分峰谷，统一按高峰价计算；cache_write 不单独计费，按 input_cache_miss 价并入输入。
-// mimo 源里的 cost 字段是美元（官方海外价 $0.14/$0.28，实测拟合误差 1e-15），
-// 不采信、不换汇——一律用本表人民币价 × token 数直接计。
+// 规则：不区分峰谷，统一按高峰价计算（使用时段以工作时间为主）；cache_write 按 input_cache_miss 价并入输入。
+// 源自带的 cost 一律不采信、不换汇——费用一律在入口用本表结算（依据见 docs/mimo.md）。
 
 export interface ModelPricing {
   /** 未命中缓存的输入价 */
@@ -16,7 +15,6 @@ export interface ModelPricing {
 
 export interface ProviderPricing {
   currency: "CNY";
-  note?: string;
   models: Readonly<Record<string, ModelPricing>>;
 }
 
@@ -72,12 +70,29 @@ export const PRICING: PricingTable = {
     },
     xiaomi: {
       currency: "CNY",
-      note: "reasoning 按 output 价计；cache_write 按 input_cache_miss 价计（源数据 write 全为 0，未实测验证）。",
+      // 源数据 cache_write 全为 0，按 miss 价并入的口径未实测验证（见 docs/mimo.md）
       models: {
         "mimo-v2.6-flash": {
           input_cache_miss: 1.0,
           input_cache_hit: 0.02,
           output: 2.0,
+        },
+      },
+    },
+    zhipu: {
+      currency: "CNY",
+      models: {
+        "GLM-5.3": {
+          input_cache_miss: 8.0,
+          input_cache_hit: 2.0,
+          output: 28.0,
+          aliases: ["glm-5.3"],
+        },
+        "GLM-5.3-Flash": {
+          input_cache_miss: 0.8,
+          input_cache_hit: 0.23,
+          output: 2.8,
+          aliases: ["glm-5.3-flash"],
         },
       },
     },

@@ -1,10 +1,10 @@
 # mimo 数据源探索
 
-> 实测日期：2026-10-09，本机数据。所有查询用只读模式验证过。
+> 实测日期：2026-10-09，本机数据。
 
 ## 位置与存储形式
 
-> 项目内统一叫 **mimo**（adapter 名、类型名、文档名都用它）；磁盘路径和数据本身仍叫 `mimocode`，不改。
+> 项目内统一称 **mimo**（adapter、类型、文档命名一致）；磁盘路径与数据名保持 `mimocode`。
 
 `~/.local/share/mimocode/mimocode.db` — SQLite（WAL 模式，同目录有 `.db-shm` / `.db-wal`）。
 
@@ -23,7 +23,7 @@ file:~/.local/share/mimocode/mimocode.db?mode=ro
 | `message` | 消息（**token/cost 的主来源**） | `id`, `session_id`, `time_created`, `data` (JSON) |
 | `part` | 消息内的分片/步骤事件 | `message_id`, `session_id`, `time_created`, `data` (JSON) |
 
-`message` 有索引 `(session_id, time_created, id)`，按会话扫很顺。
+`message` 有索引 `(session_id, time_created, id)`，按会话扫描走索引。
 
 ## assistant 消息的 data 结构
 
@@ -61,7 +61,7 @@ file:~/.local/share/mimocode/mimocode.db?mode=ro
 
 而小米官方**大陆人民币价**是：输入 **¥1**、输出 **¥2**、缓存命中 **¥0.02**（0.14 × ~7.1 ≈ 1，比值吻合汇率）。拟合值与人民币价数量级对不上 → **cost 存的是官方海外美元价**。
 
-**结论**：输出只要 RMB，所以**不采信 cost 字段，也不做汇率换算**——直接用 pricing.ts 里的人民币单价 × token 数计算，和大陆官方计价口径精准一致。cache_write 按未命中输入价计（源数据 write 全为 0，该口径未实测）。
+**结论**：输出口径为人民币，因此**不采信 cost 字段，也不做汇率换算**——直接用 pricing.ts 里的人民币单价 × token 数计算，与大陆官方计价口径一致。cache_write 按未命中输入价计（源数据 write 全为 0，该口径未实测）。
 
 ## part 表的 step-finish 事件
 
@@ -71,12 +71,10 @@ file:~/.local/share/mimocode/mimocode.db?mode=ro
  "cost":0.000960848}
 ```
 
-part 类型分布（当前库）：`tool` 48、`step-start` 44、`reasoning` 44、`step-finish` 43、`text` 22。
-
 ## ⚠️ 关键注意事项
 
-1. **message 与 part 不要双计**。实测两者 cost / input / output 总和**完全相同**（各 $0.01819、61259 in、11760 out），即每个 assistant 消息对应一个 step-finish，是同一份数据的两个视角。**adapter 只取 `message` 表即可**（它额外带 modelID 和时间戳）。
-2. **历史数据疑似只有近期**。当前库：3 个 session、53 条 message、1 个 project，最早数据 2026-10-08（即调研前一天）；`claude_import`、`external_import` 表均为空。老数据可能被清过或另有存储——写代码前可再确认一次。
+1. **message 与 part 不要双计**。实测两者的 cost / input / output 汇总完全相同，即每个 assistant 消息对应一个 step-finish，是同一份数据的两个视角。**adapter 只取 `message` 表即可**（它额外带 modelID 和时间戳）。
+2. **历史数据仅近期**：库中最早数据为 2026-10-08，此前数据不存在；`claude_import`、`external_import` 表均为空。查询更早日期会得到空结果。
 3. 用户消息（`role: user`）没有 tokens/cost，统计时过滤即可。
 4. 同一 `parentID` 下会有多条 assistant 消息（每个 step 一条），**每条都是独立的一次计费**，直接求和。
 

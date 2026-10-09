@@ -1,14 +1,15 @@
-// CLI 参数解析：token-counter <mimo|dsh> (--from/--to | --last N)
+// CLI 参数解析：token-counter <mimo|dsh|zcode> (--from/--to | --last N)
 
 import { parseArgs } from "node:util";
 import type { DateRange, Source } from "./types";
 import { lastNDays, parseDate } from "./time";
 
-export const USAGE = `Usage: token-counter <mimo|dsh> [date range]
+export const USAGE = `Usage: token-counter <mimo|dsh|zcode> [date range]
 
 Sources:
   mimo               MiMoCode local SQLite
   dsh                DeepSeek Harness session logs
+  zcode              ZCode local SQLite (GLM)
 
 Date range (required, one of):
   --from YYYY-MM-DD  start date (inclusive)
@@ -17,7 +18,8 @@ Date range (required, one of):
 
 Examples:
   token-counter dsh --last 7
-  token-counter mimo --from 2026-10-01 --to 2026-10-08`;
+  token-counter mimo --from 2026-10-01 --to 2026-10-08
+  token-counter zcode --from 2026-08-27 --to 2026-09-05`;
 
 export class UsageError extends Error {}
 
@@ -27,8 +29,8 @@ export interface CliOptions {
 }
 
 function asSource(s: string): Source {
-  if (s === "mimo" || s === "dsh") return s;
-  throw new UsageError(`unknown source "${s}" (expected mimo or dsh)`);
+  if (s === "mimo" || s === "dsh" || s === "zcode") return s;
+  throw new UsageError(`unknown source "${s}" (expected mimo, dsh or zcode)`);
 }
 
 export function parseCli(argv: string[]): CliOptions {
@@ -54,7 +56,7 @@ export function parseCli(argv: string[]): CliOptions {
 
   if (values.help) throw new UsageError("");
   if (positionals.length !== 1) {
-    throw new UsageError("expected exactly one source argument (mimo or dsh)");
+    throw new UsageError("expected exactly one source argument (mimo, dsh or zcode)");
   }
   const src = asSource(positionals[0]!);
 

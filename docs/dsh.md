@@ -12,15 +12,13 @@
 - **session 目录**：新旧命名混用——旧的叫 `session-<uuid>`，新的直接是 `<uuid>`
 - **zstd 压缩的 JSONL 事件流**，每行一个 JSON 事件
 
-当前本机文件盘点：`session.jsonl.zstd` 30 个（旧格式）、`session.v3.jsonl.zstd` 8 个、`session.v4.jsonl.zstd` 39 个、`session.lock` 47 个（0 字节，标记会话目录）。同一目录出现两份 zstd 的情况极少（仅 1 例）。
-
-**数据是活跃的**：最新会话文件写于 2026-10-08 16:34（探索前一天），2026-10-08 当天有 13 个文件在写。
+三种格式文件并存（旧格式 / `.v3.` / `.v4.`）+ 0 字节 `session.lock`（标记会话目录）。同一目录出现两份 zstd 的情况罕见但存在。
 
 > `~/.dsh/settings.yaml.imported` 里 `agent-default-model: deepseek-official / deepseek-flash`。
 
 ### dsh desk（桌面版）共用同一份数据
 
-桌面版 `DeepSeek Harness.app`（2026-09-25 安装）**不写自己的会话目录**——进程启动参数直接用 profile `~/.dsh/profiles/desktop`，会话仍落在 `~/.dsh/sessions/`；`~/Library/Application Support/@deepseek-ai/dsh-desktop/` 里只有纯 Electron 样板（Cache/Cookies/Local Storage），没有会话数据。**adapter 只需覆盖 `~/.dsh/sessions/`，desk 与 CLI 都会统计到。**
+桌面版 `DeepSeek Harness.app` **不写自己的会话目录**——进程启动参数直接用 profile `~/.dsh/profiles/desktop`，会话仍落在 `~/.dsh/sessions/`；`~/Library/Application Support/@deepseek-ai/dsh-desktop/` 里只有纯 Electron 样板（Cache/Cookies/Local Storage），没有会话数据。**adapter 只需覆盖 `~/.dsh/sessions/`，desk 与 CLI 都会统计到。**
 
 ## 聚合缓存：`session_projcache`（推荐优先读）
 
@@ -28,7 +26,7 @@
 ~/.dsh/storages/session_projcache/sessions/<session-id>.json
 ```
 
-dsh 自己维护的**会话级聚合缓存**，本机76 个文件，与 76 个会话目录一一对应（无遗漏）。结构（`version: 7`）：
+dsh 自己维护的**会话级聚合缓存**，与会话目录一一对应（本机 76/76）。结构（`version: 7`）：
 
 ```json
 {
@@ -56,11 +54,11 @@ dsh 自己维护的**会话级聚合缓存**，本机76 个文件，与 76 个�
 - 它是**缓存**，带 `version` 字段，格式可能随 dsh 升级变化——解析要容错；丢失/损坏时回退到事件流
 - **只有会话粒度**：按天 / 按小时的维度仍需从事件流（`seq` + `time`）重建
 - 无 cost、无 reasoning token 分项（tokenUsage totals 只有 4 项）
-- 另有旧版单文件 `~/.dsh/storages/session_projcache.json`（2026-09-02 后未更新，已被上述目录取代，可忽略）
+- 另有旧版单文件 `~/.dsh/storages/session_projcache.json`（已废弃，可忽略）
 
 ## 三种格式版本
 
-> **实现状态（2026-10-09 决定）**：adapter **只解析 v4**（`*.v4.jsonl.zstd`，唯一还在被写入的格式）；旧格式与 v3 在扫描入口**静默跳过**——不解析、不告警，需要历史数据时可用 `--from` 指定日期（v4 最早始于 2026-09-28）。以下 legacy 描述仅作数据源调研存档。
+> **adapter 只解析 v4**（`*.v4.jsonl.zstd`，唯一仍在写入的格式）；旧格式与 v3 在扫描入口**静默跳过**——不解析、不告警。需要 v4 之前的历史数据时，legacy 描述仅作格式存档参考。v4 最早始于 2026-09-28。
 
 首行是会话元数据：`{"type":"session","version":4,"id":"...","createdAt":...,"cwd":"~/Code/my-project",...}` —— **`cwd` 就是项目维度**。
 
@@ -137,8 +135,8 @@ usage 事件本身不带模型，模型在：
 ## ⚠️ 关键注意事项
 
 1. **没有任何 cost 字段** → 必须走 `src/pricing.ts` 价格表（当前统一按高峰价，见 README）。
-2. **格式版本不统一**（已按 2026-10-09 决定处理）：adapter 只解析 v4，旧格式 / v3 静默跳过；实测文件名与首行 `session.version` 对应关系为：`session.jsonl.zstd` ↔ version 0、`.v3.` ↔ 3、`.v4.` ↔ 4。
-3. **增量同步**：活跃会话文件会持续追加写（本机最新 mtime 即昨天）。建议按 `(session, seq)` 去重 upsert；文件整体是 zstd 流，**没法只读尾部**，每次需全量解压（单文件最大约 0.5 MB，可接受）。
+2. **格式版本不统一**：adapter 只解析 v4，旧格式 / v3 静默跳过；文件名与首行 `session.version` 的对应关系为：`session.jsonl.zstd` ↔ version 0、`.v3.` ↔ 3、`.v4.` ↔ 4，**以内容 version 字段为准**。
+3. **增量写入**：活跃会话文件持续追加写；文件整体是 zstd 流，**无法只读尾部**，每次需全量解压（单文件最大约 0.5 MB，可接受）。
 4. `session.lock`（0 字节）出现在活跃会话目录，可作为"正在写"的信号，但读取本身不受影响。
 5. 速度指标：
    - tokens/s = `outputTokens ÷ (最后事件 time − 首事件 time)`

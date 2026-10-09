@@ -2,7 +2,7 @@
 
 import type { ModelPricing } from "./pricing";
 
-export type Source = "mimo" | "dsh";
+export type Source = "mimo" | "dsh" | "zcode";
 
 export interface Usage {
   input: number;

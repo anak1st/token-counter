@@ -3,6 +3,7 @@
 import { USAGE, UsageError, parseCli } from "./cli";
 import { scanDsh } from "./adapters/dsh";
 import { scanMimo } from "./adapters/mimo";
+import { scanZcode } from "./adapters/zcode";
 import { aggregate } from "./aggregate";
 import { render } from "./render";
 import type { DateRange, Source, UsageEvent } from "./types";
@@ -10,6 +11,7 @@ import type { DateRange, Source, UsageEvent } from "./types";
 const SCANNERS: Record<Source, (range: DateRange) => AsyncGenerator<UsageEvent>> = {
   mimo: scanMimo,
   dsh: scanDsh,
+  zcode: scanZcode,
 };
 
 async function main(): Promise<void> {
