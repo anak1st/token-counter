@@ -139,8 +139,8 @@ usage 事件本身不带模型，模型在：
 3. **增量写入**：活跃会话文件持续追加写；文件整体是 zstd 流，**无法只读尾部**，每次需全量解压（单文件最大约 0.5 MB，可接受）。
 4. `session.lock`（0 字节）出现在活跃会话目录，可作为"正在写"的信号，但读取本身不受影响。
 5. 速度指标：
-   - tokens/s = `outputTokens ÷ (最后事件 time − 首事件 time)`
-   - 首 token 延迟 = 首个 usage 事件 time − 同 step 的 `step/start` time
+   - tokens/s = `outputTokens ÷ Σ(stream[] 末块 time − 首块 time)`（纯解码，剔除 TTFT 与工具执行；无分块时退回 step 跨度）
+   - 首 token 延迟 = `stream[]` 首块 time − 同 step 的 `step/start` time（不能用 usage 事件 time——那是流结束时刻）
 
 ## 验证过的命令
 

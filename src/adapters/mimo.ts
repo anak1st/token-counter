@@ -1,5 +1,7 @@
 // mimo adapter：只读打开 mimocode.db，从 message 表取 assistant 消息
-// TTFT 近似：step-start → 该 step 内第一个 reasoning/text part（库不存流式首包）
+// 速度原料：step-start part 时间 = 流首包时刻 —— TTFT = step-start - 消息创建，
+// 生成窗口 = step-start → 流结束（reasoning/text/patch 的更新时间、tool 调用的创建时间），
+// 不含工具执行与请求前空档
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
@@ -15,6 +17,7 @@ interface MsgRow {
 interface PartRow {
   message_id: string;
   time_created: number;
+  time_updated: number | null;
   data: string;
 }
 
@@ -26,21 +29,24 @@ function warnOnce(model: string): void {
   console.warn(`warning: no CNY pricing for model "${model}" (mimo), cost counted as 0`);
 }
 
-/** 每个 step 的 TTFT 样本 = 第一个 content part 时间 - step-start 时间；消息内取均值 */
-function ttftFromParts(parts: readonly PartRow[]): number | undefined {
-  const samples: number[] = [];
-  let stepStart: number | undefined;
+/** 消息内的流时间线：step-start（首包）与流结束时刻 */
+function streamWindow(parts: readonly PartRow[]): { start?: number; end?: number } {
+  let start: number | undefined;
+  let end: number | undefined;
+  const bump = (t: number): void => {
+    end = end === undefined ? t : Math.max(end, t);
+  };
   for (const p of parts) {
     const type = (JSON.parse(p.data) as { type?: string }).type;
     if (type === "step-start") {
-      stepStart = p.time_created;
-    } else if (stepStart !== undefined && (type === "reasoning" || type === "text")) {
-      samples.push(p.time_created - stepStart);
-      stepStart = undefined;
+      start = start === undefined ? p.time_created : Math.min(start, p.time_created);
+    } else if (type === "reasoning" || type === "text" || type === "patch") {
+      bump(p.time_updated ?? p.time_created);
+    } else if (type === "tool") {
+      bump(p.time_created);
     }
   }
-  if (samples.length === 0) return undefined;
-  return samples.reduce((a, b) => a + b, 0) / samples.length;
+  return { start, end };
 }
 
 export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
@@ -67,7 +73,7 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
     const placeholders = ids.map(() => "?").join(",");
     const parts = db
       .query(
-        `SELECT message_id, time_created, data FROM part
+        `SELECT message_id, time_created, time_updated, data FROM part
          WHERE message_id IN (${placeholders})
          ORDER BY time_created`,
       )
@@ -110,7 +116,14 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
 
       const ts = data.time?.created ?? row.time_created;
       const completed = data.time?.completed;
-      const ttft = ttftFromParts(partsByMsg.get(row.id) ?? []);
+      const win = streamWindow(partsByMsg.get(row.id) ?? []);
+      const ttft = win.start !== undefined ? win.start - ts : undefined;
+      const genMs =
+        win.start !== undefined && win.end !== undefined && win.end > win.start
+          ? win.end - win.start
+          : completed !== undefined && completed > ts
+            ? completed - ts
+            : undefined;
 
       yield {
         source: "mimo",
@@ -120,8 +133,8 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
         usage,
         cost,
         ...(pricing && { pricing }),
-        ...(ttft !== undefined && { ttftMs: ttft }),
-        ...(completed !== undefined && completed > ts && { durationMs: completed - ts }),
+        ...(ttft !== undefined && ttft >= 0 && { ttftMs: ttft }),
+        ...(genMs !== undefined && genMs > 0 && { durationMs: genMs }),
       };
     }
   } finally {

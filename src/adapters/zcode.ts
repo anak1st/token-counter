@@ -1,6 +1,6 @@
 // zcode adapter：只读打开 ~/.zcode/cli/db/db.sqlite，从 model_usage 表取请求粒度用量
 // input_tokens 含 cache_read → 计价基数（未命中输入）需扣减
-// TTFT 为源生字段 time_to_first_token_ms
+// 速度原料：TTFT 为源生字段 time_to_first_token_ms；生成耗时 = duration_ms - TTFT（纯解码）
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
@@ -67,6 +67,14 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
       if (pricing) cost = calcCost(pricing, usage);
       else warnOnce(model);
 
+      // 速度分母用纯解码窗口：duration_ms 含 TTFT，有 TTFT 时扣除
+      const decodeMs =
+        row.duration_ms != null && row.duration_ms > 0
+          ? row.time_to_first_token_ms != null && row.time_to_first_token_ms > 0
+            ? row.duration_ms - row.time_to_first_token_ms
+            : row.duration_ms
+          : undefined;
+
       yield {
         source: "zcode",
         session: row.session_id,
@@ -76,7 +84,7 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
         cost,
         ...(pricing && { pricing }),
         ...(row.time_to_first_token_ms != null && { ttftMs: row.time_to_first_token_ms }),
-        ...(row.duration_ms != null && row.duration_ms > 0 && { durationMs: row.duration_ms }),
+        ...(decodeMs !== undefined && decodeMs > 0 && { durationMs: decodeMs }),
       };
     }
   } finally {

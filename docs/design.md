@@ -129,12 +129,12 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 
 ## 7. 速度指标口径
 
-| 指标 | 定义 | mimo 原料 | dsh 原料 |
-|---|---|---|---|
-| TTFT | 每步开始 → 首个响应的延迟，取当日均值 | `part` 的 step-start → step-finish（**近似值**：库不存流式首包） | `step/start` time → 首个 usage 事件 time |
-| 平均输出速度 | 当日 output tokens ÷ 当日生成耗时 | 每条 assistant 消息 `time.created/completed` 之差 | 相邻事件时间跨度（step 起止） |
+| 指标 | 定义 | mimo 原料 | dsh 原料 | zcode 原料 |
+|---|---|---|---|---|
+| TTFT | 首 token 延迟，取当日均值 | step-start part 时间 − 消息 `time.created`（**近似**：含请求构建，库不存流式首包） | `stream[]` 首个分块 time − 同 step 的 `step/start` time | `time_to_first_token_ms`（真实流式测量） |
+| 平均输出速度 | 当日 output tokens ÷ 当日**纯解码耗时**（剔除 TTFT 与工具执行） | step-start part → 流结束（reasoning/text/patch 的 `time_updated`、tool 的 `time_created`） | `stream[]` 末块 − 首块（无分块时退回 step 跨度） | `duration_ms − time_to_first_token_ms`（无 TTFT 时退回 `duration_ms`） |
 
-- dsh 的 TTFT 与速度是真实值；mimo 的 TTFT 是近似（step 粒度），表中可标注
+- 三源的 Speed 统一为纯解码速度，可与 dsh 自带的 `decodeTokens ÷ decodeMs` 直接对比（实测差约 10%，来自分块标记粒度）；mimo 的 TTFT 是近似值，表中可标注
 - 当日没有速度原料的行（如纯缓存命中、零输出）输出 `—` 而非 0
 
 ## 8. 性能预期

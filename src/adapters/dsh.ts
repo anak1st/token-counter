@@ -1,7 +1,8 @@
 // dsh adapter：扫描 ~/.dsh/sessions 下的 zstd JSONL 事件流
 // 只解析最新格式（*.v4.jsonl.zstd）：usage 在 assistant/message 的 data.usage；
 // 旧格式（session.jsonl.zstd / .v3.）静默跳过，不解析不告警。
-// 速度原料：step/start → 首个 usage 事件 = TTFT；step/end - step/start = 生成耗时
+// 速度原料：assistant/message.data.stream[] 分块时间戳 —— 首块 - step/start = TTFT，
+// 末块 - 首块 = 纯解码窗口（不含工具执行与 TTFT）；无 stream 时退回 step 跨度。
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -61,21 +62,21 @@ function buildEvent(
   };
 }
 
-/** step 结束/收尾：给该 step 的第一个事件挂上 ttft 与 duration */
+/** step 结束/收尾：给缺时间字段的事件补上 ttft 与 duration（stream 缺失时的兜底） */
 function flushStep(state: FileState, key: string): UsageEvent[] {
   const list = state.pending.get(key);
   if (!list || list.length === 0) return [];
   state.pending.delete(key);
   const step = state.steps.get(key);
-  if (!step?.start) return list;
+  const stepStart = step?.start;
+  if (stepStart === undefined) return list;
   const firstTs = Math.min(...list.map((e) => e.ts));
-  const ttft = firstTs - step.start;
-  const duration = step.end !== undefined ? step.end - step.start : undefined;
-  return list.map((e, i) =>
-    i === 0
-      ? { ...e, ttftMs: ttft, ...(duration !== undefined && { durationMs: duration }) }
-      : e,
-  );
+  return list.map((e, i) => {
+    if (i > 0) return e;
+    const ttft = e.ttftMs ?? firstTs - stepStart;
+    const duration = e.durationMs ?? (step?.end !== undefined ? step.end - stepStart : undefined);
+    return { ...e, ttftMs: ttft, ...(duration !== undefined && { durationMs: duration }) };
+  });
 }
 
 function flushAll(state: FileState): UsageEvent[] {
@@ -149,7 +150,25 @@ function processLine(
 
   const k = stepKey(ev.data as { turn?: number; step?: number });
   const event = buildEvent(state, ev.time, u);
-  if (k !== undefined && state.steps.has(k)) {
+
+  // stream[] 分块时间戳：首块 - step/start = TTFT，末块 - 首块 = 纯解码窗口
+  const stream = (ev.data as { stream?: { time?: unknown }[] } | undefined)?.stream;
+  const times: number[] = [];
+  if (Array.isArray(stream)) {
+    for (const c of stream) if (typeof c?.time === "number") times.push(c.time);
+  }
+  if (times.length >= 2) {
+    const first = Math.min(...times);
+    const last = Math.max(...times);
+    if (last > first) {
+      event.durationMs = last - first;
+      const start = k !== undefined ? state.steps.get(k)?.start : undefined;
+      if (start !== undefined && first >= start) event.ttftMs = first - start;
+    }
+  }
+
+  if (k !== undefined && state.steps.has(k) && event.durationMs === undefined) {
+    // 缺分块时间：挂到 pending，等 step/end 用 step 跨度兜底
     let list = state.pending.get(k);
     if (!list) {
       list = [];

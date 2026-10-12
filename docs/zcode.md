@@ -99,8 +99,8 @@ raw_usage_json={"inputTokens":30307,"outputTokens":125,"totalTokens":30432,
 | 指标 | 取法 |
 |---|---|
 | TTFT | `time_to_first_token_ms`（现成，492/625 行有值） |
-| 生成耗时 | `duration_ms`（请求级 start→completed，含排队与工具间隙——比 dsh 的 step 口径略宽） |
-| tokens/s | 当日 `output_tokens` ÷ 当日 `duration_ms`（聚合口径与其他源一致） |
+| 生成耗时 | `duration_ms − time_to_first_token_ms`（纯解码，剔除 TTFT；无 TTFT 的行退回 `duration_ms`） |
+| tokens/s | 当日 `output_tokens` ÷ 当日纯解码耗时（与其他源的纯解码口径一致） |
 
 ## 模型与价格
 
