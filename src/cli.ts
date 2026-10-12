@@ -21,6 +21,7 @@ Examples:
   token-counter mimo --from 2026-10-01 --to 2026-10-08
   token-counter zcode --from 2026-08-27 --to 2026-09-05`;
 
+/** CLI 用法错误；message 为空表示正常退出（--help） */
 export class UsageError extends Error {}
 
 export interface CliOptions {
@@ -28,11 +29,13 @@ export interface CliOptions {
   range: DateRange;
 }
 
+/** 位置参数 → 源名单；不在此名单直接报错 */
 function asSource(s: string): Source {
   if (s === "mimo" || s === "dsh" || s === "zcode") return s;
   throw new UsageError(`unknown source "${s}" (expected mimo, dsh or zcode)`);
 }
 
+/** 解析 argv（已去掉 node 与脚本路径）；非法参数抛 UsageError */
 export function parseCli(argv: string[]): CliOptions {
   let values: { from?: string; to?: string; last?: string; help?: boolean };
   let positionals: string[];

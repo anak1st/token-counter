@@ -7,6 +7,7 @@ export type Source = "mimo" | "dsh" | "zcode";
 export interface Usage {
   input: number;
   output: number;
+  /** 思考 token：必须与 output 互斥——源若为包含关系（如 dsh 旧格式），adapter 归一扣除；拿不到则为 0 且留在 output 内 */
   reasoning: number;
   cache_read: number;
   cache_write: number;
@@ -16,6 +17,14 @@ export interface UsageEvent {
   source: Source;
   session: string;
   model: string;
+  /** 计价 provider（pricing 表键），入口结算时由 adapter 确定 */
+  provider: string;
+  /** 执行体（main / 子代理），turn 级统计按此过滤；源无此概念则缺省 */
+  agent?: string;
+  /** 所属问题（turn）标识，turn 级统计分组用；源无法直接给出则缺省 */
+  turn?: string;
+  /** 被中止/出错（正常完成缺省） */
+  aborted?: boolean;
   /** 分桶时间戳（毫秒，按本地时区分天） */
   ts: number;
   usage: Usage;
@@ -25,7 +34,7 @@ export interface UsageEvent {
   pricing?: ModelPricing;
   /** 首 token 延迟样本（毫秒） */
   ttftMs?: number;
-  /** 该样本所属的生成耗时（毫秒） */
+  /** 纯解码窗口（毫秒）：不含 TTFT 与工具执行 */
   durationMs?: number;
 }
 
@@ -48,6 +57,8 @@ export interface DayRow {
   ttftSumMs: number;
   ttftCount: number;
   genMs: number;
+  /** 参与速度计算的 output+reasoning：只累计带时长的样本，与 genMs 保证同源 */
+  speedTokens: number;
 }
 
 export interface ModelGroup {

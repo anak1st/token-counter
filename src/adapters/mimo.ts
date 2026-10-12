@@ -1,12 +1,15 @@
-// mimo adapter：只读打开 mimocode.db，从 message 表取 assistant 消息
+// mimo adapter：只读打开 mimocode.db，从 message 表取 assistant 消息，part 表取时间线
 // 速度原料：step-start part 时间 = 流首包时刻 —— TTFT = step-start - 消息创建，
 // 生成窗口 = step-start → 流结束（reasoning/text/patch 的更新时间、tool 调用的创建时间），
 // 不含工具执行与请求前空档
+// 字段映射：provider/agent 取消息自带字段（缺省兜底 xiaomi）；error 非空记 aborted；
+// turn 需按用户消息边界推导，暂不填充（留给 turn 模式）
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
 import { calcCost, resolveModel } from "../pricing";
 
+/** message 表行（data 为 JSON，见 scanMimo 内的字段类型） */
 interface MsgRow {
   id: string;
   session_id: string;
@@ -14,6 +17,7 @@ interface MsgRow {
   data: string;
 }
 
+/** part 表行；time_updated 用于取流式内容的结束时刻 */
 interface PartRow {
   message_id: string;
   time_created: number;
@@ -23,13 +27,14 @@ interface PartRow {
 
 const warned = new Set<string>();
 
+/** 无人民币报价的模型每进程只警告一次，费用按 0 计 */
 function warnOnce(model: string): void {
   if (warned.has(model)) return;
   warned.add(model);
   console.warn(`warning: no CNY pricing for model "${model}" (mimo), cost counted as 0`);
 }
 
-/** 消息内的流时间线：step-start（首包）与流结束时刻 */
+/** 消息内的流时间线：step-start（首包）与流结束时刻；无对应 part 时字段缺省 */
 function streamWindow(parts: readonly PartRow[]): { start?: number; end?: number } {
   let start: number | undefined;
   let end: number | undefined;
@@ -49,6 +54,7 @@ function streamWindow(parts: readonly PartRow[]): { start?: number; end?: number
   return { start, end };
 }
 
+/** 只读扫描 mimo 库，惰性产出区间内的 assistant 消息事件 */
 export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
   const path = `${process.env.HOME}/.local/share/mimocode/mimocode.db`;
   let db: Database;
@@ -98,6 +104,9 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
           cache?: { read?: number; write?: number };
         };
         modelID?: string;
+        providerID?: string;
+        agent?: string;
+        error?: unknown;
         time?: { created?: number; completed?: number };
       };
       const t = data.tokens ?? {};
@@ -109,7 +118,9 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
         cache_write: t.cache?.write ?? 0,
       };
       const model = data.modelID ?? "unknown";
-      const pricing = resolveModel("xiaomi", model);
+      // 源自带 providerID（与 pricing 表键一致），缺省时按 mimo 恒有口径兜底
+      const provider = data.providerID ?? "xiaomi";
+      const pricing = resolveModel(provider, model);
       let cost = 0;
       if (pricing) cost = calcCost(pricing, usage);
       else warnOnce(model);
@@ -117,25 +128,33 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
       const ts = data.time?.created ?? row.time_created;
       const completed = data.time?.completed;
       const win = streamWindow(partsByMsg.get(row.id) ?? []);
-      const ttft = win.start !== undefined ? win.start - ts : undefined;
-      const genMs =
-        win.start !== undefined && win.end !== undefined && win.end > win.start
-          ? win.end - win.start
-          : completed !== undefined && completed > ts
-            ? completed - ts
-            : undefined;
 
-      yield {
+      // TTFT = 消息创建 → 流首包（含请求构建；库不存真正的流式首包）
+      const ttft = win.start !== undefined ? win.start - ts : undefined;
+
+      // 生成窗口优先取流时间线；part 时间线缺失时退回消息生命周期（含工具执行，欠准）
+      let genMs: number | undefined;
+      if (win.start !== undefined && win.end !== undefined && win.end > win.start) {
+        genMs = win.end - win.start;
+      } else if (completed !== undefined && completed > ts) {
+        genMs = completed - ts;
+      }
+
+      const event: UsageEvent = {
         source: "mimo",
         session: row.session_id,
         model,
+        provider,
         ts,
         usage,
         cost,
-        ...(pricing && { pricing }),
-        ...(ttft !== undefined && ttft >= 0 && { ttftMs: ttft }),
-        ...(genMs !== undefined && genMs > 0 && { durationMs: genMs }),
       };
+      if (pricing) event.pricing = pricing;
+      if (data.agent !== undefined) event.agent = data.agent;
+      if (data.error != null) event.aborted = true;
+      if (ttft !== undefined && ttft >= 0) event.ttftMs = ttft;
+      if (genMs !== undefined && genMs > 0) event.durationMs = genMs;
+      yield event;
     }
   } finally {
     db.close();

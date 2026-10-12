@@ -1,4 +1,4 @@
-// token-counter 入口
+// token-counter 入口：解析参数 → 跑唯一选中的 adapter → 聚合 → 渲染
 
 import { USAGE, UsageError, parseCli } from "./cli";
 import { scanDsh } from "./adapters/dsh";
@@ -8,6 +8,7 @@ import { aggregate } from "./aggregate";
 import { render } from "./render";
 import type { DateRange, Source, UsageEvent } from "./types";
 
+/** 源 → 扫描器注册表；新增数据源在此登记（与 cli 的源名单保持同步） */
 const SCANNERS: Record<Source, (range: DateRange) => AsyncGenerator<UsageEvent>> = {
   mimo: scanMimo,
   dsh: scanDsh,
@@ -27,6 +28,7 @@ async function main(): Promise<void> {
     throw e;
   }
 
+  // 事件先收集完再聚合：dsh 的 aborted 标记在 turn/end 才回填，必须等到全部产出
   const events: UsageEvent[] = [];
   for await (const ev of SCANNERS[opts.source](opts.range)) events.push(ev);
 

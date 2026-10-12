@@ -13,11 +13,13 @@ export interface ModelPricing {
   aliases?: readonly string[];
 }
 
+/** 单个 provider 的价目表；currency 恒为人民币 */
 export interface ProviderPricing {
   currency: "CNY";
   models: Readonly<Record<string, ModelPricing>>;
 }
 
+/** 全量价格表：provider 键 → 价目（见文件头的结算规则） */
 export interface PricingTable {
   providers: Readonly<Record<string, ProviderPricing>>;
 }

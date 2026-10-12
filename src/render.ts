@@ -24,10 +24,11 @@ function rowCells(row: DayRow, label: string): string[] {
     `¥${row.cost.toFixed(3)}`,
     total > 0 ? `¥${((row.cost / total) * 1e6).toFixed(2)}` : "—",
     row.ttftCount > 0 ? `${(row.ttftSumMs / row.ttftCount / 1000).toFixed(1)}s` : "—",
-    row.genMs > 0 ? `${Math.round((output / row.genMs) * 1000)}/s` : "—",
+    row.genMs > 0 ? `${Math.round((row.speedTokens / row.genMs) * 1000)}/s` : "—",
   ];
 }
 
+/** 按列宽拼一行：RIGHT 决定左右对齐，两端补齐后去掉行尾空格 */
 function joinRow(cells: readonly string[], widths: readonly number[]): string {
   return cells
     .map((c, i) => {

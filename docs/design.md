@@ -83,11 +83,13 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 
 整个系统唯一流通的数据结构：
 
-`source, session, project, model, ts, usage{input, output, reasoning, cache_read, cache_write}, cost, pricing, 起止时间戳`
+必填：`source, session, provider, model, ts, usage{input, output, reasoning, cache_read, cache_write}, cost`；
+随源可选：`pricing, ttftMs, durationMs`（速度原料）、`agent, turn, aborted`（turn 级统计的能力字段，源能直接给出才填充，mimo 的 turn 暂缺）
 
-- 用量维度源里没有就缺省（dsh 旧格式无 reasoning），**不编造**
-- **cost 与 pricing 在入口一次结算、一次取定**：两源统一查 `src/pricing.ts` 的**人民币单价** × token 数——mimo 源 cost 是美元，不采信、不换汇（见 mimo.md「cost 字段实测」）；dsh 本身无 cost。模型名先过 aliases 归一。结算用的 `pricing` 对象随事件携带 → 聚合挂到 `ModelGroup` → 渲染的价格行只读展示。**下游任何环节不再二次查价**，也不感知 provider 概念（source→provider 的映射只存在于各 adapter 内部）
-- **速度存原料不存派生值**：事件带起止时间戳或所属 step 边界，TTFT / tokens/s 在聚合期按当次查询的口径计算——口径以后想改，改一处聚合逻辑即可
+- 用量维度源里没有就缺省（dsh v4 无 reasoning），**不编造**
+- **reasoning 必须与 output 互斥**：源为包含关系时 adapter 归一扣除；拿不到则为 0 且留在 output 内（渲染以 `output + reasoning` 展示，依赖此不变量）
+- **cost 与 pricing 在入口一次结算、一次取定**：三源统一查 `src/pricing.ts` 的**人民币单价** × token 数——mimo 源 cost 是美元，不采信、不换汇（见 mimo.md「cost 字段实测」）；dsh/zcode 本身无 cost。模型名先过 aliases 归一。结算用的 `pricing` 对象随事件携带 → 聚合挂到 `ModelGroup` → 渲染的价格行只读展示。**下游任何环节不再二次查价**；provider→价目的映射只存在于各 adapter 内部，事件只携带结算结果
+- **速度存原料不存派生值**：事件带 `ttftMs` / `durationMs`（纯解码窗口），TTFT / tokens/s 在聚合期按当次查询的口径计算——口径以后想改，改一处聚合逻辑即可；速度分子只累计带时长的样本（`DayRow.speedTokens`），与分母保证同源
 
 ### 4.2 Adapter
 
@@ -132,7 +134,7 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 | 指标 | 定义 | mimo 原料 | dsh 原料 | zcode 原料 |
 |---|---|---|---|---|
 | TTFT | 首 token 延迟，取当日均值 | step-start part 时间 − 消息 `time.created`（**近似**：含请求构建，库不存流式首包） | `stream[]` 首个分块 time − 同 step 的 `step/start` time | `time_to_first_token_ms`（真实流式测量） |
-| 平均输出速度 | 当日 output tokens ÷ 当日**纯解码耗时**（剔除 TTFT 与工具执行） | step-start part → 流结束（reasoning/text/patch 的 `time_updated`、tool 的 `time_created`） | `stream[]` 末块 − 首块（无分块时退回 step 跨度） | `duration_ms − time_to_first_token_ms`（无 TTFT 时退回 `duration_ms`） |
+| 平均输出速度 | 带时长样本的 output tokens ÷ 这些样本的纯解码耗时（剔除 TTFT 与工具执行，分子分母同源） | step-start part → 流结束（reasoning/text/patch 的 `time_updated`、tool 的 `time_created`） | `stream[]` 末块 − 首块（无分块时退回 step 跨度） | `duration_ms − time_to_first_token_ms`（无 TTFT 时退回 `duration_ms`） |
 
 - 三源的 Speed 统一为纯解码速度，可与 dsh 自带的 `decodeTokens ÷ decodeMs` 直接对比（实测差约 10%，来自分块标记粒度）；mimo 的 TTFT 是近似值，表中可标注
 - 当日没有速度原料的行（如纯缓存命中、零输出）输出 `—` 而非 0
