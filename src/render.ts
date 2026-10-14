@@ -1,5 +1,5 @@
 // 分组表格渲染：全英文文案、纯空格对齐、无装饰线
-// 价格行只读 ModelGroup.pricing（入口结算时带来），渲染层不感知 provider
+// 价格行只读 ModelGroup.pricing，渲染层不重算价格
 
 import type { DayRow, ModelGroup, Source } from "./types";
 import type { ModelPricing } from "./pricing";

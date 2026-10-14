@@ -2,7 +2,7 @@
 
 import type { ModelPricing } from "./pricing";
 
-export type Source = "mimo" | "dsh" | "zcode";
+export type Source = "mimo" | "dsh" | "zcode" | "opencode";
 
 export interface Usage {
   input: number;
@@ -16,9 +16,8 @@ export interface Usage {
 export interface UsageEvent {
   source: Source;
   session: string;
+  /** 计价模型名（价格表的键） */
   model: string;
-  /** 计价 provider（pricing 表键），入口结算时由 adapter 确定 */
-  provider: string;
   /** 执行体（main / 子代理），turn 级统计按此过滤；源无此概念则缺省 */
   agent?: string;
   /** 所属问题（turn）标识，turn 级统计分组用；源无法直接给出则缺省 */

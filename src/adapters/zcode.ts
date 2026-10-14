@@ -1,14 +1,14 @@
 // zcode adapter：只读打开 ~/.zcode/cli/db/db.sqlite，从 model_usage 表取请求粒度用量
 // input_tokens 含 cache_read → 计价基数（未命中输入）需扣减
 // 速度原料：TTFT 为源生字段 time_to_first_token_ms；生成耗时 = duration_ms - TTFT（纯解码）
-// 字段映射：turn/agent/status 为源生列；provider 恒 zhipu（源 provider_id 是计费套餐名）；
+// 字段映射：model_id/turn/agent/status 取自源生列（源 provider_id 是计费套餐名，不参与计价）；
 // status=cancelled 或用户取消记 aborted（此类行 usage 通常全 0，会被零用量过滤跳过）
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
 import { calcCost, resolveModel } from "../pricing";
 
-/** model_usage 表行（列名同库，data 语义见 docs/zcode.md） */
+/** model_usage 表行（列名同库） */
 interface UsageRow {
   session_id: string;
   model_id: string;
@@ -24,15 +24,6 @@ interface UsageRow {
   cache_creation_input_tokens: number;
   time_to_first_token_ms: number | null;
   duration_ms: number | null;
-}
-
-const warned = new Set<string>();
-
-/** 无人民币报价的模型每进程只警告一次，费用按 0 计 */
-function warnOnce(model: string): void {
-  if (warned.has(model)) return;
-  warned.add(model);
-  console.warn(`warning: no CNY pricing for model "${model}" (zcode), cost counted as 0`);
 }
 
 /** 只读扫描 model_usage 表，惰性产出区间内的请求事件 */
@@ -72,12 +63,9 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
       if (usage.input + usage.output + usage.cache_read + usage.cache_write === 0) continue;
 
       const model = row.model_id;
-      // 源 provider_id 是计费套餐名（builtin:bigmodel-coding-plan），计价 provider 恒为 zhipu
-      const provider = "zhipu";
-      const pricing = resolveModel(provider, model);
+      const pricing = resolveModel(model);
       let cost = 0;
       if (pricing) cost = calcCost(pricing, usage);
-      else warnOnce(model);
 
       // status=cancelled 或用户主动取消的行保留部分用量，标记为中止
       const aborted = row.status === "cancelled" || row.cancelled_by_user === 1;
@@ -93,7 +81,6 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
         source: "zcode",
         session: row.session_id,
         model,
-        provider,
         ts: row.started_at,
         usage,
         cost,

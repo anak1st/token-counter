@@ -3,15 +3,13 @@
 // 旧格式（session.jsonl.zstd / .v3.）静默跳过，不解析不告警。
 // 速度原料：assistant/message.data.stream[] 分块时间戳 —— 首块 - step/start = TTFT，
 // 末块 - 首块 = 纯解码窗口（不含工具执行与 TTFT）；无 stream 时退回 step 跨度。
-// 字段映射：provider 恒 deepseek（事件流无 provider 概念）；turn 取 data.turn；
-// aborted 由 turn/end 的 reason.kind 在 turn 收尾时回填到本 turn 全部事件。
+// 字段映射：turn 取 data.turn；aborted 由 turn/end 的 reason.kind 在 turn 收尾时回填；
+// 模型从 request/context 或 request/header 取（会话内可能变化），计价按模型名结算 cost。
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { DateRange, Usage, UsageEvent } from "../types";
 import { calcCost, resolveModel } from "../pricing";
-
-const warned = new Set<string>();
 
 /** 单步的起止时刻（step/start 记 start，step/end 记 end） */
 interface StepState {
@@ -30,20 +28,13 @@ interface FileState {
   openTurns: Map<string, UsageEvent[]>;
 }
 
-/** 无人民币报价的模型每进程只警告一次，费用按 0 计 */
-function warnOnce(model: string): void {
-  if (warned.has(model)) return;
-  warned.add(model);
-  console.warn(`warning: no CNY pricing for model "${model}" (dsh), cost counted as 0`);
-}
-
 /** step 定位键（turn:step）；事件缺任一字段则不参与 step 关联 */
 function stepKey(data: { turn?: number; step?: number } | undefined): string | undefined {
   if (data?.turn === undefined || data?.step === undefined) return undefined;
   return `${data.turn}:${data.step}`;
 }
 
-/** usage → 归一化事件：入口一次结算 cost 与 pricing */
+/** usage → 归一化事件：按模型名结算 cost 与 pricing */
 function buildEvent(
   state: FileState,
   ts: number,
@@ -56,16 +47,13 @@ function buildEvent(
     cache_read: Number(u.cacheReadTokens ?? 0),
     cache_write: Number(u.cacheWriteTokens ?? 0),
   };
-  const pricing = resolveModel("deepseek", state.model);
+  const pricing = resolveModel(state.model);
   let cost = 0;
   if (pricing) cost = calcCost(pricing, usage);
-  else warnOnce(state.model);
   const event: UsageEvent = {
     source: "dsh",
     session: state.sessionId,
     model: state.model,
-    // 事件流无 provider 字段，dsh 恒为 DeepSeek
-    provider: "deepseek",
     ts,
     usage,
     cost,

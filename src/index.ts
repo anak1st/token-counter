@@ -4,6 +4,7 @@ import { USAGE, UsageError, parseCli } from "./cli";
 import { scanDsh } from "./adapters/dsh";
 import { scanMimo } from "./adapters/mimo";
 import { scanZcode } from "./adapters/zcode";
+import { scanOpencode } from "./adapters/opencode";
 import { aggregate } from "./aggregate";
 import { render } from "./render";
 import type { DateRange, Source, UsageEvent } from "./types";
@@ -13,6 +14,7 @@ const SCANNERS: Record<Source, (range: DateRange) => AsyncGenerator<UsageEvent>>
   mimo: scanMimo,
   dsh: scanDsh,
   zcode: scanZcode,
+  opencode: scanOpencode,
 };
 
 async function main(): Promise<void> {
@@ -36,7 +38,18 @@ async function main(): Promise<void> {
     console.log("no usage data in the selected range");
     return;
   }
-  console.log(render(aggregate(events), opts.source));
+
+  const groups = aggregate(events);
+
+  // 未知模型（查不到人民币价）不出表格，只在末尾列出 id
+  const known = groups.filter((g) => g.pricing !== undefined);
+  const unknown = groups.filter((g) => g.pricing === undefined).map((g) => g.model);
+
+  if (known.length > 0) console.log(render(known, opts.source));
+  if (unknown.length > 0) {
+    if (known.length > 0) console.log("");
+    console.log(`unknown models (no CNY pricing): ${unknown.join(", ")}`);
+  }
 }
 
 main().catch((e) => {

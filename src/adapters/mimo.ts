@@ -2,7 +2,7 @@
 // 速度原料：step-start part 时间 = 流首包时刻 —— TTFT = step-start - 消息创建，
 // 生成窗口 = step-start → 流结束（reasoning/text/patch 的更新时间、tool 调用的创建时间），
 // 不含工具执行与请求前空档
-// 字段映射：provider/agent 取消息自带字段（缺省兜底 xiaomi）；error 非空记 aborted；
+// 字段映射：modelID/agent 取消息自带字段；error 非空记 aborted；
 // turn 需按用户消息边界推导，暂不填充（留给 turn 模式）
 
 import { Database } from "bun:sqlite";
@@ -23,15 +23,6 @@ interface PartRow {
   time_created: number;
   time_updated: number | null;
   data: string;
-}
-
-const warned = new Set<string>();
-
-/** 无人民币报价的模型每进程只警告一次，费用按 0 计 */
-function warnOnce(model: string): void {
-  if (warned.has(model)) return;
-  warned.add(model);
-  console.warn(`warning: no CNY pricing for model "${model}" (mimo), cost counted as 0`);
 }
 
 /** 消息内的流时间线：step-start（首包）与流结束时刻；无对应 part 时字段缺省 */
@@ -104,7 +95,6 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
           cache?: { read?: number; write?: number };
         };
         modelID?: string;
-        providerID?: string;
         agent?: string;
         error?: unknown;
         time?: { created?: number; completed?: number };
@@ -118,12 +108,9 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
         cache_write: t.cache?.write ?? 0,
       };
       const model = data.modelID ?? "unknown";
-      // 源自带 providerID（与 pricing 表键一致），缺省时按 mimo 恒有口径兜底
-      const provider = data.providerID ?? "xiaomi";
-      const pricing = resolveModel(provider, model);
+      const pricing = resolveModel(model);
       let cost = 0;
       if (pricing) cost = calcCost(pricing, usage);
-      else warnOnce(model);
 
       const ts = data.time?.created ?? row.time_created;
       const completed = data.time?.completed;
@@ -144,7 +131,6 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
         source: "mimo",
         session: row.session_id,
         model,
-        provider,
         ts,
         usage,
         cost,

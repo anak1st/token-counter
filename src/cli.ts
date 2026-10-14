@@ -1,15 +1,16 @@
-// CLI 参数解析：token-counter <mimo|dsh|zcode> (--from/--to | --last N)
+// CLI 参数解析：token-counter <mimo|dsh|zcode|opencode> (--from/--to | --last N)
 
 import { parseArgs } from "node:util";
 import type { DateRange, Source } from "./types";
 import { lastNDays, parseDate } from "./time";
 
-export const USAGE = `Usage: token-counter <mimo|dsh|zcode> [date range]
+export const USAGE = `Usage: token-counter <mimo|dsh|zcode|opencode> [date range]
 
 Sources:
   mimo               MiMoCode local SQLite
   dsh                DeepSeek Harness session logs
   zcode              ZCode local SQLite (GLM)
+  opencode           OpenCode local SQLite
 
 Date range (required, one of):
   --from YYYY-MM-DD  start date (inclusive)
@@ -19,7 +20,8 @@ Date range (required, one of):
 Examples:
   token-counter dsh --last 7
   token-counter mimo --from 2026-10-01 --to 2026-10-08
-  token-counter zcode --from 2026-08-27 --to 2026-09-05`;
+  token-counter zcode --from 2026-08-27 --to 2026-09-05
+  token-counter opencode --last 7`;
 
 /** CLI 用法错误；message 为空表示正常退出（--help） */
 export class UsageError extends Error {}
@@ -31,8 +33,8 @@ export interface CliOptions {
 
 /** 位置参数 → 源名单；不在此名单直接报错 */
 function asSource(s: string): Source {
-  if (s === "mimo" || s === "dsh" || s === "zcode") return s;
-  throw new UsageError(`unknown source "${s}" (expected mimo, dsh or zcode)`);
+  if (s === "mimo" || s === "dsh" || s === "zcode" || s === "opencode") return s;
+  throw new UsageError(`unknown source "${s}" (expected mimo, dsh, zcode or opencode)`);
 }
 
 /** 解析 argv（已去掉 node 与脚本路径）；非法参数抛 UsageError */
@@ -59,7 +61,7 @@ export function parseCli(argv: string[]): CliOptions {
 
   if (values.help) throw new UsageError("");
   if (positionals.length !== 1) {
-    throw new UsageError("expected exactly one source argument (mimo, dsh or zcode)");
+    throw new UsageError("expected exactly one source argument (mimo, dsh, zcode or opencode)");
   }
   const src = asSource(positionals[0]!);
 
