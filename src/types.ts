@@ -18,6 +18,8 @@ export interface UsageEvent {
   session: string;
   /** 计价模型名（价格表的键） */
   model: string;
+  /** 所属 provider（网关 / 套餐名，如 opencode-go、deepseek-official），分组键之一；源无此字段则缺省 */
+  provider?: string;
   /** 执行体（main / 子代理），turn 级统计按此过滤；源无此概念则缺省 */
   agent?: string;
   /** 所属问题（turn）标识，turn 级统计分组用；源无法直接给出则缺省 */
@@ -61,6 +63,8 @@ export interface DayRow {
 }
 
 export interface ModelGroup {
+  /** 该组所属 provider（聚合时源未给出则归为 unknown） */
+  provider: string;
   model: string;
   /** 该模型结算用的价格（组内事件共享），供渲染展示 */
   pricing?: ModelPricing;

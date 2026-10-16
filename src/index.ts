@@ -41,11 +41,13 @@ async function main(): Promise<void> {
 
   const groups = aggregate(events);
 
-  // 未知模型（查不到人民币价）不出表格，只在末尾列出 id
+  // 未知模型（查不到人民币价）不出表格，只在末尾列出 provider/model
   const known = groups.filter((g) => g.pricing !== undefined);
-  const unknown = groups.filter((g) => g.pricing === undefined).map((g) => g.model);
+  const unknown = groups
+    .filter((g) => g.pricing === undefined)
+    .map((g) => `${g.provider}/${g.model}`);
 
-  if (known.length > 0) console.log(render(known, opts.source));
+  if (known.length > 0) console.log(render(known));
   if (unknown.length > 0) {
     if (known.length > 0) console.log("");
     console.log(`unknown models (no CNY pricing): ${unknown.join(", ")}`);

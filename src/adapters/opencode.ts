@@ -2,7 +2,7 @@
 // 一条 assistant 消息 = 一次模型请求；tokens.input 不含 cache read，计价无需扣减
 // 速度原料：首个 reasoning part 的 time.created − 消息 time.created = TTFT（近似）；
 // time.streamed − 首个 part 的 time.created = 纯解码窗口（streamed 是流结束时刻，不含工具执行）。
-// 字段映射：model.id 用于计价、agent 取消息自带（providerID 是网关名，不参与）；
+// 字段映射：model.id 用于计价、model.providerID 作分组（网关名）、agent 取消息自带；
 // finish=error 或 error 非空记 aborted；无显式 turn。
 
 import { Database } from "bun:sqlite";
@@ -97,6 +97,7 @@ export async function* scanOpencode(range: DateRange): AsyncGenerator<UsageEvent
         cost,
       };
       if (pricing) event.pricing = pricing;
+      if (data.model?.providerID !== undefined) event.provider = data.model.providerID;
       if (data.agent !== undefined) event.agent = data.agent;
       if (data.finish === "error" || data.error != null) event.aborted = true;
       // TTFT ≈ 消息创建 → 首个 reasoning part（近似：含请求构建，库不存流式首包）

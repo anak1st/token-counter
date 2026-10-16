@@ -1,7 +1,7 @@
 // 分组表格渲染：全英文文案、纯空格对齐、无装饰线
 // 价格行只读 ModelGroup.pricing，渲染层不重算价格
 
-import type { DayRow, ModelGroup, Source } from "./types";
+import type { DayRow, ModelGroup } from "./types";
 import type { ModelPricing } from "./pricing";
 
 const HEADERS = ["Date", "Input", "Output", "Cache", "Cache%", "Cost", "Per 1M", "TTFT", "Speed"] as const;
@@ -49,7 +49,7 @@ function priceLine(pricing: ModelPricing | undefined): string {
   );
 }
 
-export function render(groups: readonly ModelGroup[], source: Source): string {
+export function render(groups: readonly ModelGroup[]): string {
   const lines: string[] = [];
 
   // 年份一致时日期显示 MM-DD，跨年则显示完整 YYYY-MM-DD
@@ -59,7 +59,7 @@ export function render(groups: readonly ModelGroup[], source: Source): string {
 
   groups.forEach((g, gi) => {
     if (gi > 0) lines.push("");
-    lines.push(`${source} · ${g.model}`);
+    lines.push(`${g.provider} · ${g.model}`);
     lines.push(priceLine(g.pricing));
     lines.push("");
 

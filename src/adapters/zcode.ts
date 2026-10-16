@@ -1,7 +1,7 @@
 // zcode adapter：只读打开 ~/.zcode/cli/db/db.sqlite，从 model_usage 表取请求粒度用量
 // input_tokens 含 cache_read → 计价基数（未命中输入）需扣减
 // 速度原料：TTFT 为源生字段 time_to_first_token_ms；生成耗时 = duration_ms - TTFT（纯解码）
-// 字段映射：model_id/turn/agent/status 取自源生列（源 provider_id 是计费套餐名，不参与计价）；
+// 字段映射：model_id/turn/agent/status 取自源生列（provider_id 是计费套餐名，原样作分组，不参与计价）；
 // status=cancelled 或用户取消记 aborted（此类行 usage 通常全 0，会被零用量过滤跳过）
 
 import { Database } from "bun:sqlite";
@@ -11,6 +11,7 @@ import { calcCost, resolveModel } from "../pricing";
 /** model_usage 表行（列名同库） */
 interface UsageRow {
   session_id: string;
+  provider_id: string | null;
   model_id: string;
   turn_id: string | null;
   agent: string | null;
@@ -39,7 +40,7 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
   try {
     const rows = db
       .query(
-        `SELECT session_id, model_id, turn_id, agent, status, cancelled_by_user,
+        `SELECT session_id, provider_id, model_id, turn_id, agent, status, cancelled_by_user,
                 started_at,
                 input_tokens, output_tokens, reasoning_tokens,
                 cache_read_input_tokens, cache_creation_input_tokens,
@@ -86,6 +87,7 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
         cost,
       };
       if (pricing) event.pricing = pricing;
+      if (row.provider_id !== null) event.provider = row.provider_id;
       if (row.agent !== null) event.agent = row.agent;
       if (row.turn_id !== null) event.turn = row.turn_id;
       if (aborted) event.aborted = true;

@@ -15,10 +15,10 @@ token-counter mimo --last 30
 - 数据源是**位置参数**（`mimo` / `dsh` / `zcode` / `opencode`）：只跑被选中的那个 adapter，不查的源完全不访问
 - **无本地存储**：每次查询直接读数据源，算完即走，不留库、不留状态
 
-输出为**分组多表**：一个模型一组，组内每天一行，竖向排列。**输出文案全部用英文**（中文双字节不利于对齐），仅费用用人民币 `¥`；纯文本对齐，不画装饰线：
+输出为**分组多表**：一个 (provider, 模型) 一组，组内每天一行，竖向排列。**输出文案全部用英文**（中文双字节不利于对齐），仅费用用人民币 `¥`；纯文本对齐，不画装饰线：
 
 ```
-dsh · deepseek-flash
+deepseek-official · deepseek-flash
 price: in miss ¥2.00 / hit ¥0.04 / out ¥8.00 per 1M tok
 
 Date       Input      Output       Cache    Cache%     Cost   Per 1M   TTFT   Speed
@@ -27,12 +27,12 @@ Date       Input      Output       Cache    Cache%     Cost   Per 1M   TTFT   Sp
 10-08     21,340     52,118   2,104,832     96.1%   ¥0.134   ¥0.06    1.5s    45/s
 Total     41,922    106,312   3,615,552     95.0%   ¥0.262   ¥0.07    1.2s    42/s
 
-dsh · deepseek-pro
-price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
+opencode-go · deepseek-v4.1-flash
+price: in miss ¥2.00 / hit ¥0.04 / out ¥8.00 per 1M tok
 10-05      4,096      9,810     128,000     89.4%   ¥0.172   ¥1.21    2.1s    31/s
 ```
 
-- **分组键 = 归一化后的模型名**；一次查询只选一个源，但源内可能有多个模型 → 多组
+- **分组键 = (provider, 模型名)**：同一模型可能来自多个 provider（网关 / 套餐），分开成组；组头显示 `provider · 模型`（provider 源里没有则归为 `unknown`）。一次查询只选一个源，但源内可能有多个 provider/模型 → 多组
 - 组内每行一天（按日期升序，只列区间内有数据的天），组末附合计行
 - token 分项：input / output / cache（read+write）；百分比为各分项占当日总 token 的比例（示例展示缓存%，实际可扩展为 input%/output%/cache% 三列）
 - **Per 1M（性价比）**：当日总费用 ÷ 当日总 token × 10⁶，即混合有效单价（¥ / 百万 token）——缓存占比越高越低
@@ -68,14 +68,14 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
  └──────────────┬────────────────────┘
                 │  归一化事件（惰性迭代，携带已结算 cost 与所用 pricing）
                 ▼
-       内存聚合：按 (模型, 本地日期) 双键分桶
-       Map<model, Map<day, {input, output, cache_*, cost, ttft_samples, durations}>>
+       内存聚合：按 (provider, 模型, 本地日期) 三键分桶
+       Map<provider, Map<model, Map<day, {input, output, cache_*, cost, ttft_samples, durations}>>>
                 │  pricing 挂到 ModelGroup（组内共享）
                 ▼
-       每模型一组：补算百分比与速度 → 格式化表格输出（价格行只读 group.pricing，见 §6）
+       每 (provider, 模型) 一组：补算百分比与速度 → 格式化表格输出（价格行只读 group.pricing，见 §6）
 ```
 
-一次查询 = 解析参数 → 跑一个 adapter → 内存里聚合 → 按模型分组打印。**没有中间落盘，没有需要同步的状态。**
+一次查询 = 解析参数 → 跑一个 adapter → 内存里聚合 → 按 (provider, 模型) 分组打印。**没有中间落盘，没有需要同步的状态。**
 
 ## 4. 核心抽象
 
@@ -84,11 +84,11 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 整个系统唯一流通的数据结构：
 
 必填：`source, session, model, ts, usage{input, output, reasoning, cache_read, cache_write}, cost`；
-随源可选：`pricing, ttftMs, durationMs`（速度原料）、`agent, turn, aborted`（turn 级统计的能力字段，源能直接给出才填充，mimo 的 turn 暂缺）
+随源可选：`provider`（分组键，源给出网关/套餐名才填充，缺省归为 `unknown`）、`pricing, ttftMs, durationMs`（速度原料）、`agent, turn, aborted`（turn 级统计的能力字段，源能直接给出才填充，mimo 的 turn 暂缺）
 
 - 用量维度源里没有就缺省（dsh v4 无 reasoning），**不编造**
 - **reasoning 必须与 output 互斥**：源为包含关系时 adapter 归一扣除；拿不到则为 0 且留在 output 内（渲染以 `output + reasoning` 展示，依赖此不变量）
-- **cost 与 pricing 在入口一次结算、一次取定**：各源统一按**模型名**查 `src/pricing.ts` 的**人民币单价** × token 数——**厂商只是价目表的分组标签，不是查价依据**；模型名先精确匹配、再走 aliases 归一。源里带 cost 的（mimo/opencode，均为美元）不采信、不换汇（见 mimo.md「cost 字段实测」）；dsh/zcode 本身无 cost。**查不到 model id 的模型视为未知，不出表格，仅在渲染末尾列出 id**（便于补价）。结算用的 `pricing` 对象随事件携带 → 聚合挂到 `ModelGroup` → 渲染的价格行只读展示。**下游任何环节不再二次查价**，事件只携带结算结果
+- **cost 与 pricing 在入口一次结算、一次取定**：各源统一按**模型名**查 `src/pricing.ts` 的**人民币单价** × token 数——**厂商只是价目表的分组标签，不是查价依据**；模型名先精确匹配、再走 aliases 归一。源里带 cost 的（mimo/opencode，均为美元）不采信、不换汇（见 mimo.md「cost 字段实测」）；dsh/zcode 本身无 cost。**查不到 model id 的模型视为未知，不出表格，仅在渲染末尾列出 provider/model**（便于补价）。结算用的 `pricing` 对象随事件携带 → 聚合挂到 `ModelGroup` → 渲染的价格行只读展示。**下游任何环节不再二次查价**，事件只携带结算结果
 - **速度存原料不存派生值**：事件带 `ttftMs` / `durationMs`（纯解码窗口），TTFT / tokens/s 在聚合期按当次查询的口径计算——口径以后想改，改一处聚合逻辑即可；速度分子只累计带时长的样本（`DayRow.speedTokens`），与分母保证同源
 
 ### 4.2 Adapter
@@ -114,7 +114,7 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 
 - **时区**：按本机本地时区分桶（事件时间戳均为毫秒）
 - **区间语义**：`--from` 含、`--to` 不含（左闭右开），`--last N` = 今天起往前 N 个自然日
-- **分桶粒度**：天；聚合键 = (模型, 日期)，值为累加器
+- **分桶粒度**：天；聚合键 = (provider, 模型, 日期)，值为累加器
 - **百分比**：各分项 ÷ 当日 (input + output + cache_read + cache_write)
 - **费用**：逐事件计价后按天累加（而不是拿当日总量事后乘单价——单价对所有事件相同，结果等价，逐事件算对将来的分层计价更稳）
 
@@ -123,12 +123,12 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 排版原则：**全英文、对齐、留白、无装饰**。
 
 - **语言**：所有输出文案（表头、组头、合计行、提示与告警）一律英文——中文是双字节字符，与数字混排时对齐规则复杂且终端表现不一致；**唯独费用用人民币 `¥`**（如 `¥0.087`），这是数值格式的一部分，不是文案
-- **分组**：每模型一组；组头一行 `源 · 模型`（如 `dsh · deepseek-flash`），紧接一行该模型的 `price:`（三项单价，元/百万 token，查不到显示 `—`），组间空一行
+- **分组**：每 (provider, 模型) 一组；组头一行 `provider · 模型`（如 `deepseek-official · deepseek-flash`，provider 源里没有则为 `unknown`），紧接一行该模型的 `price:`（三项单价，元/百万 token，查不到显示 `—`），组间空一行
 - **组内**：首行表头（`Date / Input / Output / Cache / Cache% / Cost / Per 1M / TTFT / Speed`），然后每天一行（日期升序），末行 `Total`
 - **对齐**：文本列左对齐（日期），数字列一律右对齐（千分位分隔），表头与所在列对齐方式一致；列间距 2 个空格
 - **列宽**：按组内实际数据的最大宽度自适应，组与组之间允许不同宽（各组独立排版）
 - **空值**：无数据的指标输出 `—`，不留空、不写 0
-- **未知模型**：查不到人民币价的模型**不出分组表格**，只在全部组之后一行列出 model id（`unknown models (no CNY pricing): id1, id2`），便于补价
+- **未知模型**：查不到人民币价的模型**不出分组表格**，只在全部组之后一行列出 provider/model（`unknown models (no CNY pricing): provider/model, ...`），便于补价
 - **精度**：token 整数带千分位；费用 3 位小数带 `¥`；Per 1M 2 位小数带 `¥`；TTFT 1 位小数带 `s`；速度整数带 `/s`；百分比 1 位小数带 `%`
 - 终端输出纯文本；将来 `--json` 直接吐结构化数据，格式化只属于人类输出层
 
@@ -154,7 +154,7 @@ price: in miss ¥9.00 / hit ¥0.30 / out ¥27.00 per 1M tok
 |---|---|---|
 | **无本地存储** | SQLite 明细 + rollup | 省掉同步水位、幂等、重算三大块复杂度；价格每次查询都是最新。代价：每次查询都重读源（可接受，见 §8）；**源数据被清理则无法追溯**（接受） |
 | cost 入口一次结算 | 查询期算 | 无存储下两者成本相同，入口结算让聚合逻辑完全无价格感知 |
-| **源作为必选位置参数** | `--source` 可选、默认全查 | 一次只查一个源：输出分组天然清晰（源 · 模型），实现只需跑一个 adapter；要全查就查两次 |
+| **源作为必选位置参数** | `--source` 可选、默认全查 | 一次只查一个源：实现只需跑一个 adapter（组头显示 provider · 模型，源本身无需出现在输出里）；要全查就查两次 |
 | dsh 走事件流全路径 | 用聚合缓存做快路径 | 输出要按天拆分，会话级缓存本来就满足不了；减少一条路径即减少一类故障（缓存过期、格式变更） |
 | 速度存原料 | 落库派生值 | 无存储下天然如此；口径演进只需改聚合期 |
 

@@ -4,7 +4,7 @@
 
 ## 目标
 
-命令行指定数据源和日期范围，输出分组汇总——**一个模型一组，组内每天一行**：
+命令行指定数据源和日期范围，输出分组汇总——**一个 (provider, 模型) 一组，组内每天一行**（同一模型来自不同 provider 时分开成组，组头显示 `provider · 模型`）：
 
 ```
 token-counter dsh --last 7
@@ -22,7 +22,7 @@ token-counter opencode --last 7
 
 输出为对齐的纯文本表格——排版清晰即可，不画装饰线；**文案全英文**（中文双字节不利对齐），费用用人民币 `¥`（格式约定见 [design §6](docs/design.md)）。
 
-未知模型（查不到人民币价）不出表格，只在末尾一行列出 model id，便于补价。
+未知模型（查不到人民币价）不出表格，只在末尾一行列出 provider/model，便于补价。
 
 ## 文档
 
@@ -56,7 +56,7 @@ bun src/index.ts --help
 
 1. 参数解析：位置参数选源（`mimo`/`dsh`/`zcode`/`opencode`）+ 日期（`--from/--to`、`--last N`）
 2. 被选中的只读 adapter（mimo/zcode/opencode 走 SQL 按时间过滤；dsh 解压 zstd 按版本解析）产出归一化事件
-3. 内存按 (模型, 日期) 聚合 + 计价 → 按模型分组的对齐表格输出（token 分项与占比、费用、TTFT、tokens/s）
+3. 内存按 (provider, 模型, 日期) 聚合 + 计价 → 按 (provider, 模型) 分组的对齐表格输出（token 分项与占比、费用、TTFT、tokens/s）
 
 ## 待办
 

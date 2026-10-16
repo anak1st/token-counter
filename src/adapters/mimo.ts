@@ -2,7 +2,7 @@
 // 速度原料：step-start part 时间 = 流首包时刻 —— TTFT = step-start - 消息创建，
 // 生成窗口 = step-start → 流结束（reasoning/text/patch 的更新时间、tool 调用的创建时间），
 // 不含工具执行与请求前空档
-// 字段映射：modelID/agent 取消息自带字段；error 非空记 aborted；
+// 字段映射：modelID/providerID/agent 取消息自带字段；error 非空记 aborted；
 // turn 需按用户消息边界推导，暂不填充（留给 turn 模式）
 
 import { Database } from "bun:sqlite";
@@ -95,6 +95,7 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
           cache?: { read?: number; write?: number };
         };
         modelID?: string;
+        providerID?: string;
         agent?: string;
         error?: unknown;
         time?: { created?: number; completed?: number };
@@ -108,6 +109,10 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
         cache_write: t.cache?.write ?? 0,
       };
       const model = data.modelID ?? "unknown";
+      // 零用量消息（如出错未发出的请求）跳过，以免生成空日期行
+      const total = usage.input + usage.output + usage.reasoning + usage.cache_read + usage.cache_write;
+      if (total === 0) continue;
+
       const pricing = resolveModel(model);
       let cost = 0;
       if (pricing) cost = calcCost(pricing, usage);
@@ -136,6 +141,7 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
         cost,
       };
       if (pricing) event.pricing = pricing;
+      if (data.providerID !== undefined) event.provider = data.providerID;
       if (data.agent !== undefined) event.agent = data.agent;
       if (data.error != null) event.aborted = true;
       if (ttft !== undefined && ttft >= 0) event.ttftMs = ttft;

@@ -88,7 +88,7 @@ file:~/.local/share/opencode/opencode.db?mode=ro
    按 design §4.3 主源原则，**只读 `session_message`**，`session_v2` 不参与取数。
 4. **`finish='error'` 或 `data.error` 非空记 aborted**；空 `finish` 是进行中的消息（`streamed` / `completed` 可能缺失）。
 5. **`providerID` 是 opencode 的网关名**（如 `opencode-go`），不是模型厂商；计价按 `model.id` **平铺查价**，
-   `providerID` 不参与（见「模型与价格」）。
+   `providerID` 不参与计价，只作分组键（组头 `provider · 模型`，见「模型与价格」）。
 6. **`session_message` 是会话内追加写的活数据**（当前会话本身也在其中），必须只读打开。
 
 ## 速度原料

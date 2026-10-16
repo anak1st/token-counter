@@ -4,7 +4,7 @@
 // 速度原料：assistant/message.data.stream[] 分块时间戳 —— 首块 - step/start = TTFT，
 // 末块 - 首块 = 纯解码窗口（不含工具执行与 TTFT）；无 stream 时退回 step 跨度。
 // 字段映射：turn 取 data.turn；aborted 由 turn/end 的 reason.kind 在 turn 收尾时回填；
-// 模型从 request/context 或 request/header 取（会话内可能变化），计价按模型名结算 cost。
+// provider/模型从 request/context 或 request/header 取（会话内可能变化），计价按模型名结算 cost。
 
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -19,6 +19,7 @@ interface StepState {
 
 interface FileState {
   sessionId: string;
+  provider: string;
   model: string;
   /** 活跃 step 的起止（key = turn:step） */
   steps: Map<string, StepState>;
@@ -53,6 +54,7 @@ function buildEvent(
   const event: UsageEvent = {
     source: "dsh",
     session: state.sessionId,
+    provider: state.provider,
     model: state.model,
     ts,
     usage,
@@ -116,13 +118,15 @@ function processLine(
       if (typeof ev.id === "string") state.sessionId = ev.id;
       return;
     case "request/context": {
-      const model = (ev.data as { model?: string } | undefined)?.model;
-      if (typeof model === "string") state.model = model;
+      const d = ev.data as { provider?: string; model?: string } | undefined;
+      if (typeof d?.provider === "string") state.provider = d.provider;
+      if (typeof d?.model === "string") state.model = d.model;
       return;
     }
     case "request/header": {
-      const cfg = (ev.data as { header?: { config?: { model?: string } } } | undefined)?.header
-        ?.config;
+      const cfg = (ev.data as { header?: { config?: { provider?: string; model?: string } } } | undefined)
+        ?.header?.config;
+      if (typeof cfg?.provider === "string") state.provider = cfg.provider;
       if (typeof cfg?.model === "string") state.model = cfg.model;
       return;
     }
@@ -229,6 +233,7 @@ async function* scanFile(path: string, filename: string, range: DateRange): Asyn
 
   const state: FileState = {
     sessionId: filename,
+    provider: "unknown",
     model: "unknown",
     steps: new Map(),
     pending: new Map(),
