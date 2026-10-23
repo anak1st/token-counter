@@ -1,94 +1,124 @@
-// CLI 参数解析：token-counter <mimo|dsh|zcode|opencode> (--from/--to | --last N)
+// CLI 参数定义：Commander 负责子命令、帮助与基础校验。
+// 子命令：daily（按天，必须给日期区间）、hourly / summary（预留，只接受 --agent）。
+// 日期区间与 reserved 命令的语义校验在 resolveDailyRange / handlers 中完成。
 
-import { parseArgs } from "node:util";
+import { Command, Option } from "commander";
+import type { ColorMode } from "./color";
 import type { DateRange, Source } from "./types";
-import { lastNDays, parseDate } from "./time";
+import { lastNDays, nextDayStart, parseDate } from "./time";
 
-export const USAGE = `Usage: token-counter <mimo|dsh|zcode|opencode> [date range]
+/** --agent 的合法取值；与 SCANNERS 注册表保持一致 */
+const AGENTS: readonly Source[] = ["mimo", "dsh", "zcode", "opencode"];
 
-Sources:
-  mimo               MiMoCode local SQLite
-  dsh                DeepSeek Harness session logs
-  zcode              ZCode local SQLite (GLM)
-  opencode           OpenCode local SQLite
+export interface BaseOptions {
+  agent: Source;
+  color: ColorMode;
+}
 
-Date range (required, one of):
-  --from YYYY-MM-DD  start date (inclusive)
-  --to   YYYY-MM-DD  end date (exclusive)
-  --last N           last N days including today
+export interface DailyOptions extends BaseOptions {
+  last?: string;
+  start?: string;
+  end?: string;
+}
 
+/** 子命令的实际执行逻辑；解析只负责把选项交出去 */
+export interface CliHandlers {
+  daily(options: DailyOptions): Promise<void>;
+  hourly(options: BaseOptions): Promise<void>;
+  summary(options: BaseOptions): Promise<void>;
+}
+
+/** --agent：必填，值域由 Commander 校验 */
+function agentOption(): Option {
+  return new Option("--agent <name>", "agent app to read")
+    .choices([...AGENTS])
+    .makeOptionMandatory();
+}
+
+/** --color：auto 跟随终端，always / never 显式覆盖 */
+function colorOption(): Option {
+  return new Option("--color <when>", "color output")
+    .choices(["auto", "always", "never"])
+    .default("auto");
+}
+
+/** 构建 Commander 命令树；index 负责注入三个 handler */
+export function createProgram(handlers: CliHandlers): Command {
+  const program = new Command();
+  program
+    .name("token-counter")
+    .description("token usage and cost for AI coding agents")
+    .showHelpAfterError()
+    .showSuggestionAfterError();
+
+  program.addHelpText(
+    "after",
+    `
 Examples:
-  token-counter dsh --last 7
-  token-counter mimo --from 2026-10-01 --to 2026-10-08
-  token-counter zcode --from 2026-08-27 --to 2026-09-05
-  token-counter opencode --last 7`;
+  $ token-counter daily --agent dsh --last 7
+  $ token-counter daily --agent opencode --start 2026-10-01 --end 2026-10-08
+  $ token-counter daily --agent dsh --last 7 --color never`,
+  );
 
-/** CLI 用法错误；message 为空表示正常退出（--help） */
-export class UsageError extends Error {}
+  program
+    .command("daily")
+    .description("daily breakdown for one agent")
+    .addOption(agentOption())
+    .addOption(colorOption())
+    .option("--last <n>", "last N days including today")
+    .option("--start <date>", "start date (YYYY-MM-DD, inclusive)")
+    .option("--end <date>", "end date (YYYY-MM-DD, inclusive)")
+    .action((options: DailyOptions) => handlers.daily(options));
 
-export interface CliOptions {
-  source: Source;
-  range: DateRange;
+  program
+    .command("hourly")
+    .description("hour-of-day breakdown (reserved)")
+    .addOption(agentOption())
+    .addOption(colorOption())
+    .action((options: BaseOptions) => handlers.hourly(options));
+
+  program
+    .command("summary")
+    .description("all-time summary (reserved)")
+    .addOption(agentOption())
+    .addOption(colorOption())
+    .action((options: BaseOptions) => handlers.summary(options));
+
+  return program;
 }
 
-/** 位置参数 → 源名单；不在此名单直接报错 */
-function asSource(s: string): Source {
-  if (s === "mimo" || s === "dsh" || s === "zcode" || s === "opencode") return s;
-  throw new UsageError(`unknown source "${s}" (expected mimo, dsh, zcode or opencode)`);
-}
-
-/** 解析 argv（已去掉 node 与脚本路径）；非法参数抛 UsageError */
-export function parseCli(argv: string[]): CliOptions {
-  let values: { from?: string; to?: string; last?: string; help?: boolean };
-  let positionals: string[];
-  try {
-    const r = parseArgs({
-      args: argv,
-      allowPositionals: true,
-      strict: true,
-      options: {
-        from: { type: "string" },
-        to: { type: "string" },
-        last: { type: "string" },
-        help: { type: "boolean", short: "h" },
-      },
-    });
-    values = r.values;
-    positionals = r.positionals;
-  } catch (e) {
-    throw new UsageError(e instanceof Error ? e.message : String(e));
+/** daily 的日期区间：--last 与 --start/--end 二选一；--end 含当天 */
+export function resolveDailyRange(options: DailyOptions): DateRange {
+  const { last, start, end } = options;
+  if (last !== undefined && (start !== undefined || end !== undefined)) {
+    throw new Error("use either --last or --start/--end, not both");
   }
 
-  if (values.help) throw new UsageError("");
-  if (positionals.length !== 1) {
-    throw new UsageError("expected exactly one source argument (mimo, dsh, zcode or opencode)");
-  }
-  const src = asSource(positionals[0]!);
-
-  const { from, to, last } = values;
-  if (last !== undefined && (from !== undefined || to !== undefined)) {
-    throw new UsageError("--last cannot be combined with --from/--to");
-  }
-
-  let range: DateRange;
   if (last !== undefined) {
     const n = Number(last);
-    if (!Number.isInteger(n) || n < 1) throw new UsageError("--last expects a positive integer");
-    range = lastNDays(n);
-  } else if (from !== undefined || to !== undefined) {
-    let start = 0;
-    let end = Number.MAX_SAFE_INTEGER;
-    try {
-      if (from !== undefined) start = parseDate(from);
-      if (to !== undefined) end = parseDate(to);
-    } catch (e) {
-      throw new UsageError(e instanceof Error ? e.message : String(e));
+    if (!Number.isInteger(n) || n < 1) {
+      throw new Error("--last expects a positive integer");
     }
-    if (start >= end) throw new UsageError("--from must be earlier than --to");
-    range = { start, end };
-  } else {
-    throw new UsageError("date range required: use --from/--to or --last N");
+    return lastNDays(n);
   }
 
-  return { source: src, range };
+  if (start === undefined || end === undefined) {
+    if (start === undefined && end === undefined) {
+      throw new Error("date range required: use --last N or --start/--end");
+    }
+    throw new Error("--start and --end must be used together");
+  }
+
+  let startMs: number;
+  let endMs: number;
+  try {
+    startMs = parseDate(start);
+    endMs = parseDate(end);
+  } catch (e) {
+    throw new Error(e instanceof Error ? e.message : String(e));
+  }
+  if (startMs > endMs) {
+    throw new Error("--start must be earlier than or equal to --end");
+  }
+  return { start: startMs, end: nextDayStart(endMs) };
 }

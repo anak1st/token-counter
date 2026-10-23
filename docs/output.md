@@ -24,7 +24,6 @@ Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
 
 deepseek-official · deepseek-v4.1-flash
 price: in miss ¥2.00 / hit ¥0.04 / out ¥8.00 per 1M tok
-
 Date           Tokens  Cache%    Cost  TTFT  Speed
 2026-10-17    434,971   95.0%  ¥0.124   2.9s   33/s
 2026-10-18    636,402   88.7%  ¥0.233   5.3s   43/s
@@ -80,14 +79,24 @@ unknown models (no CNY pricing): provider/model, ...
 
 保持现有行为，便于补价。
 
-## 7. 实现位置
+## 7. 颜色
 
+- `--color auto|always|never`，默认 `auto`；每个子命令都支持。
+- `auto` 只在 stdout 是 TTY 时上色，并尊重 `NO_COLOR` / `FORCE_COLOR`；`always` / `never` 显式覆盖。
+- 颜色只用于结构：`all models` 与组头 bold cyan，表头与 `Total` bold，`price:` dim，未知模型 yellow，错误 red；数据值不上色。
+- 所有颜色都在表格补齐之后包裹，ANSI 码不参与列宽。
+- `--color never`、`NO_COLOR`、管道输出必须与无色版本逐字节一致。
+
+## 8. 实现位置
+
+- `src/cli.ts`：Commander 子命令、选项与帮助。
+- `src/color.ts`：`--color` 解析与语义化样式。
 - `src/aggregate.ts` 的 `overall()`：把各分组的每日行按日期合并，折出总计。
-- `src/render.ts` 的 `renderOverall()`：总计表；`render()`：分组表。
-- `src/index.ts`：先打印总计，空一行，再打印分组。
+- `src/render.ts` 的 `renderOutput()`：总计表 + 分组表，共用列宽并应用颜色。
+- `src/index.ts`：分发子命令，扫描、聚合、渲染。
 - 数据源、日期区间、计价与聚合口径不变。
 
-## 8. 后续
+## 9. 后续
 
 - 总计表上方加横向 token bar，作为概览；分组表不加图表。
 - 需要更细的 token 拆分时，再加独立的详细模式（input / cache read / cache write / output / reasoning / total + Per 1M），不要把这些列塞回当前普通表。

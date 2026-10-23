@@ -1,17 +1,19 @@
 # token-counter
 
-统计 AI coding agent 的每日 token 用量、费用、速度。TypeScript + Bun，运行时零依赖，**无本地存储**——每次查询直接读数据源。
+统计 AI coding agent 的每日 token 用量、费用、速度。TypeScript + Bun，核心统计零运行时依赖（CLI 层使用 commander + chalk），**无本地存储**——每次查询直接读数据源。
 
 ## 目标
 
-命令行指定数据源和日期范围，先输出合并所有 provider / 模型的每日总计，再按 (provider, 统一模型名) 分组，组内每天一行（同一模型来自不同 provider 时分开成组，组头显示 `provider · 模型`）：
+命令行指定 agent 和日期范围，先输出合并所有 provider / 模型的每日总计，再按 (provider, 统一模型名) 分组，组内每天一行（同一模型来自不同 provider 时分开成组，组头显示 `provider · 模型`）：
 
 ```
-token-counter dsh --last 7
-token-counter mimo --from 2026-10-01 --to 2026-10-08
-token-counter zcode --from 2026-08-27 --to 2026-09-05
-token-counter opencode --last 7
+token-counter daily --agent dsh --last 7
+token-counter daily --agent mimo --start 2026-10-01 --end 2026-10-08
+token-counter daily --agent zcode --start 2026-08-27 --end 2026-09-05
+token-counter daily --agent opencode --last 7
 ```
+
+`hourly` 和 `summary` 已预留命令位，暂未实现；它们只接受 `--agent`，不接受日期范围。
 
 输出包含：
 
@@ -41,8 +43,9 @@ token-counter opencode --last 7
 ## 技术选型
 
 - **TypeScript + Bun 原生运行**，不编译；`bun run typecheck` 做类型检查
-- **运行时零依赖**：读 mimo/zcode/opencode 用内置 `bun:sqlite`（只读）；价格表是带类型的内置常量（[src/pricing.ts](src/pricing.ts)），无配置解析
-- 开发期仅 `typescript` + `@types/bun`
+- **CLI 层**：commander 管子命令、参数与帮助，chalk 管颜色；核心统计（adapter / 聚合 / 计价）不依赖第三方
+- **数据访问零依赖**：读 mimo/zcode/opencode 用内置 `bun:sqlite`（只读）；价格表是带类型的内置常量（[src/pricing.ts](src/pricing.ts)），无配置解析
+- 运行时依赖只有 `commander` + `chalk`；开发期 `typescript` + `@types/bun`
 - 价格表 [src/pricing.ts](src/pricing.ts)：价目表的键即统一模型名，`aliases` 显式收历史名 / 渠道名 / 免费档；按统一名平铺查价（厂商仅作价目表分组）；统一按高峰价（大部分在上班时间使用）；`cache_write` 并入 `input_cache_miss` 计价；定价依据与折扣期说明见各数据源文档
 
 ## 命令
@@ -51,15 +54,19 @@ token-counter opencode --last 7
 bun run typecheck   # tsc --noEmit
 
 # 查询（也可 bun run start -- <args>）
-bun src/index.ts dsh --last 7
-bun src/index.ts mimo --from 2026-10-01 --to 2026-10-08
-bun src/index.ts opencode --last 7
+bun src/index.ts daily --agent dsh --last 7
+bun src/index.ts daily --agent mimo --start 2026-10-01 --end 2026-10-08
+bun src/index.ts daily --agent opencode --last 7
+bun src/index.ts hourly --agent dsh       # 已预留，暂未实现
+bun src/index.ts summary --agent dsh      # 已预留，暂未实现
 bun src/index.ts --help
 ```
 
+`--color auto|always|never` 控制颜色，默认 `auto`：只有 TTY 上色，管道输出自动无色；`always` / `never` 可显式覆盖。
+
 ## MVP 范围
 
-1. 参数解析：位置参数选源（`mimo`/`dsh`/`zcode`/`opencode`）+ 日期（`--from/--to`、`--last N`）
+1. 参数解析：子命令 `daily` / `hourly` / `summary`；`--agent` 必填；`daily` 日期二选一——`--last N` 或 `--start/--end`（`--end` 含当天）；`hourly` / `summary` 不接受日期范围
 2. 被选中的只读 adapter（mimo/zcode/opencode 走 SQL 按时间过滤；dsh 解压 zstd 按版本解析）产出归一化事件
 3. 内存按 (provider, 统一模型名, 日期) 聚合 + 计价 → 先折出跨分组合计，再按 (provider, 统一模型名) 分组输出简化表格（总 token、费用、缓存占比、TTFT、tokens/s）
 

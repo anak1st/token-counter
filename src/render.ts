@@ -1,10 +1,11 @@
 // 表格渲染：全英文文案、纯空格对齐、无装饰线
 // 日期统一 YYYY-MM-DD；总计表与所有分组表共用同一套列宽，保证整段输出纵向对齐；
 // 表格合并 token 统计（input + output + reasoning + cache_read + cache_write），不再输出 Per 1M；
-// 价格行只读 ModelGroup.pricing，渲染层不重算价格。
+// 颜色只包裹补齐后的行，不参与列宽计算；价格行只读 ModelGroup.pricing，渲染层不重算价格。
 
 import type { DayRow, ModelGroup, Overall } from "./types";
 import type { ModelPricing } from "./pricing";
+import { plainStyle, type Style } from "./color";
 
 const HEADERS = ["Date", "Tokens", "Cache%", "Cost", "TTFT", "Speed"] as const;
 /** Date 左对齐，其余右对齐 */
@@ -42,18 +43,20 @@ function joinRow(cells: readonly string[], widths: readonly number[]): string {
     .trimEnd();
 }
 
-/** 表格主体：表头 + 每日行 + Total 行；列宽由调用方统一传入 */
+/** 表格主体：表头 + 每日行 + Total 行；列宽由调用方统一传入，颜色只包裹补齐后的行 */
 function tableLines(
   days: readonly DayRow[],
   total: DayRow,
   widths: readonly number[],
+  style: Style,
 ): string[] {
   const rows: string[][] = [];
   for (const day of days) rows.push(rowCells(day, day.date));
   rows.push(rowCells(total, "Total"));
 
-  const lines = [joinRow([...HEADERS], widths)];
-  for (const row of rows) lines.push(joinRow(row, widths));
+  const lines = [style.header(joinRow([...HEADERS], widths))];
+  for (const row of rows.slice(0, -1)) lines.push(joinRow(row, widths));
+  lines.push(style.header(joinRow(rows[rows.length - 1]!, widths)));
   return lines;
 }
 
@@ -86,19 +89,22 @@ function sharedWidths(
 }
 
 /** 全段输出：总计表、空行、各分组表；所有表格共用同一套列宽 */
-export function renderOutput(value: Overall, groups: readonly ModelGroup[]): string {
+export function renderOutput(
+  value: Overall,
+  groups: readonly ModelGroup[],
+  style: Style = plainStyle,
+): string {
   const widths = sharedWidths(value, groups);
 
   const lines: string[] = [
-    "all models",
-    ...tableLines(value.days, value.total, widths),
+    style.title("all models"),
+    ...tableLines(value.days, value.total, widths, style),
   ];
   for (const group of groups) {
     lines.push("");
-    lines.push(`${group.provider} · ${group.model}`);
-    lines.push(priceLine(group.pricing));
-    lines.push("");
-    lines.push(...tableLines(group.days, group.total, widths));
+    lines.push(style.title(`${group.provider} · ${group.model}`));
+    lines.push(style.dim(priceLine(group.pricing)));
+    lines.push(...tableLines(group.days, group.total, widths, style));
   }
 
   return lines.join("\n");

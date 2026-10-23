@@ -30,6 +30,13 @@ export function lastNDays(n: number): DateRange {
   return { start: start.getTime(), end: end.getTime() };
 }
 
+/** 给定日期的次日零点：把含 --end 的区间转成内部左闭右开 */
+export function nextDayStart(ts: number): number {
+  const d = new Date(ts);
+  d.setDate(d.getDate() + 1);
+  return d.getTime();
+}
+
 /** 毫秒时间戳 → 本地时区日期键 YYYY-MM-DD */
 export function dayKey(ts: number): string {
   const d = new Date(ts);

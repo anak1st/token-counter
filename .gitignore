@@ -29,6 +29,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .eslintcache
 .cache
 *.tsbuildinfo
+# workspace-local bun cache / temp (BUN_INSTALL_CACHE_DIR / TMPDIR)
+.bun-cache/
+.tmp/
 
 # IntelliJ based IDEs
 .idea

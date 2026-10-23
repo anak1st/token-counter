@@ -4,15 +4,16 @@
 
 ## 1. 目标
 
-一个命令行查询脚本。**先选数据源**，再给日期范围：
+一个命令行查询脚本。**先用 `--agent` 选数据源**，再给日期范围（`--last N` 或 `--start/--end` 二选一）：
 
 ```
-token-counter dsh --last 7                     # 指定源 + 最近 7 天（含今天）
-token-counter dsh --from 2026-10-01 --to 10-08 # 指定源 + 起止日期
-token-counter mimo --last 30
+token-counter daily --agent dsh --last 7                        # 指定源 + 最近 7 天（含今天）
+token-counter daily --agent dsh --start 2026-10-01 --end 2026-10-08  # 指定源 + 起止日期（含端点）
+token-counter daily --agent mimo --last 30
 ```
 
-- 数据源是**位置参数**（`mimo` / `dsh` / `zcode` / `opencode`）：只跑被选中的那个 adapter，不查的源完全不访问
+- 子命令：`daily` 输出按天明细；`hourly` / `summary` 已预留命令位，只接受 `--agent`，不接受日期范围，暂未实现
+- 数据源由 `--agent` 必填指定（`mimo` / `dsh` / `zcode` / `opencode`）：只跑被选中的那个 adapter，不查的源完全不访问
 - **无本地存储**：每次查询直接读数据源，算完即走，不留库、不留状态
 
 输出为**总计 + 分组多表**：先一张合并所有 provider / 模型的每日总计，再每 (provider, 统一模型名) 一组，组内每天一行，竖向排列。**输出文案全部用英文**（中文双字节不利于对齐），仅费用用人民币 `¥`；纯文本对齐，不画装饰线：
@@ -26,7 +27,6 @@ Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
 
 deepseek-official · deepseek-v4.1-flash
 price: in miss ¥2.00 / hit ¥0.04 / out ¥8.00 per 1M tok
-
 Date           Tokens  Cache%    Cost  TTFT  Speed
 2026-10-17    434,971   95.0%  ¥0.124   2.9s   33/s
 2026-10-18    636,402   88.7%  ¥0.233   5.3s   43/s
@@ -59,8 +59,8 @@ Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
 ## 3. 数据流
 
 ```
- CLI：位置参数选源（mimo|dsh）+ 日期参数（--from/--to/--last N）
-        │  解析为 [start_ms, end_ms)（本地时区）
+ CLI：daily 子命令 + --agent 选源 + 日期参数（--last N 或 --start/--end）
+        │  解析为 [start_ms, end_ms)（本地时区；--end 含当天）
         ▼
         │  按选中的源分发，只跑一个 adapter（另一个完全不访问）
         ▼
@@ -116,7 +116,7 @@ Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
 ## 5. 日期与聚合口径
 
 - **时区**：按本机本地时区分桶（事件时间戳均为毫秒）
-- **区间语义**：`--from` 含、`--to` 不含（左闭右开），`--last N` = 今天起往前 N 个自然日
+- **区间语义**：`--start` 含、`--end` 含（内部转成左闭右开），`--last N` = 今天起往前 N 个自然日；`--last` 与 `--start/--end` 二选一，`--start` / `--end` 必须成对出现
 - **分桶粒度**：天；聚合键 = (provider, 统一模型名, 日期)，值为累加器
 - **缓存占比**：`(cache_read + cache_write) ÷ 当日总 token`；总 token = `input + output + reasoning + cache_read + cache_write`
 - **费用**：逐事件计价后按天累加（而不是拿当日总量事后乘单价——单价对所有事件相同，结果等价，逐事件算对将来的分层计价更稳）
@@ -126,6 +126,7 @@ Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
 排版原则：**全英文、对齐、留白、无装饰**。
 
 - **语言**：所有输出文案（表头、组头、合计行、提示与告警）一律英文——中文是双字节字符，与数字混排时对齐规则复杂且终端表现不一致；**唯独费用用人民币 `¥`**（如 `¥0.087`），这是数值格式的一部分，不是文案
+- **颜色**：`--color auto|always|never`，默认 `auto`；auto 只在 TTY 上色并尊重 `NO_COLOR` / `FORCE_COLOR`；颜色码在列补齐之后包裹，不参与列宽
 - **日期**：统一 `YYYY-MM-DD`，不再按年份切换 `MM-DD`
 - **总计**：最前面一张 `all models` 表，列为 `Date / Tokens / Cache% / Cost / TTFT / Speed`；合并全部有价 provider / 模型，无价格行
 - **分组**：每 (provider, 统一模型名) 一组；组头一行 `provider · 模型`（如 `deepseek-official · deepseek-v4.1-flash`，provider 源里没有则为 `unknown`），紧接一行该模型的 `price:`（三项单价，元/百万 token，查不到显示 `—`），组间空一行
