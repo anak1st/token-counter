@@ -19,6 +19,7 @@ token-counter daily --agent opencode --last 7
 
 - **总计**：最前面一张表，合并所有有价 provider / 模型，回答整体用量与费用
 - **token 用量**：合并为一列 `Tokens = input + output + reasoning + cache_read + cache_write`
+- **Chart**：Tokens 后的柱状图；所有表共用同一最大日 token 值，最大值填满整条，宽度随终端 8–30 列自适应
 - **缓存占比**：`Cache%` = 缓存 token ÷ 当日总 token
 - **费用**：按天累计，一律按 `src/pricing.ts` 人民币价 × token 直接计（mimo/opencode 源 cost 是美元不采信、不换汇；dsh 源无 cost）
 - **速度**：首 token 延迟（TTFT）、平均输出速度（tokens/s）

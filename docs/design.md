@@ -20,23 +20,24 @@ token-counter daily --agent mimo --last 30
 
 ```
 all models
-Date           Tokens  Cache%    Cost  TTFT  Speed
-2026-10-17    434,971   95.0%  ¥0.124   2.9s   33/s
-2026-10-18    636,402   88.7%  ¥0.233   5.3s   43/s
-Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
+Date           Tokens  Chart                     Cache%    Cost  TTFT  Speed
+2026-10-17    434,971  ████████████████           95.0%  ¥0.124  2.9s   33/s
+2026-10-18    636,402  ████████████████████████   88.7%  ¥0.233  5.3s   43/s
+Total       1,071,373  —                          91.3%  ¥0.357  4.1s   38/s
 
 deepseek-official · deepseek-v4.1-flash
 price: in miss ¥2.00 / hit ¥0.04 / out ¥8.00 per 1M tok
-Date           Tokens  Cache%    Cost  TTFT  Speed
-2026-10-17    434,971   95.0%  ¥0.124   2.9s   33/s
-2026-10-18    636,402   88.7%  ¥0.233   5.3s   43/s
-Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
+Date           Tokens  Chart                     Cache%    Cost  TTFT  Speed
+2026-10-17    434,971  ████████████████           95.0%  ¥0.124  2.9s   33/s
+2026-10-18    636,402  ████████████████████████   88.7%  ¥0.233  5.3s   43/s
+Total       1,071,373  —                          91.3%  ¥0.357  4.1s   38/s
 ```
 
 - **总计表**：标题固定 `all models`，合并本次查询全部有价 provider / 模型的每日行；没有价格行
 - **分组键 = (provider, 统一模型名)**：同一模型可能来自多个 provider（网关 / 套餐），分开成组；组头显示 `provider · 模型`（provider 源里没有则归为 `unknown`）。模型名在 adapter 入口归一（历史名、渠道名、免费档都落到同一统一名，见 §4.1），分组与展示都用统一名
 - 组内每行一天（按日期升序，只列区间内有数据的天），组末附合计行
 - **token 合并**：`Tokens = input + output + reasoning + cache_read + cache_write`；`Cache%` = 缓存 token ÷ 当日总 token
+- **Chart**：Tokens 后的柱状图；所有表共用同一最大日 token 值，最大值填满整条；`Total` 行不是时间点，显示 `—`
 - **不再输出 Per 1M**：成本只看当日 `Cost`；组头的 `price:` 行仍保留三档单价，Per 1M 留给后续的详细视角
 - 速度：首 token 延迟（TTFT）、平均 token 输出速度（tokens/s）
 - 未知模型不出表，只在末尾列出 provider/model
@@ -128,10 +129,11 @@ Total       1,071,373   91.3%  ¥0.357   4.1s   38/s
 - **语言**：所有输出文案（表头、组头、合计行、提示与告警）一律英文——中文是双字节字符，与数字混排时对齐规则复杂且终端表现不一致；**唯独费用用人民币 `¥`**（如 `¥0.087`），这是数值格式的一部分，不是文案
 - **颜色**：`--color auto|always|never`，默认 `auto`；auto 只在 TTY 上色并尊重 `NO_COLOR` / `FORCE_COLOR`；颜色码在列补齐之后包裹，不参与列宽
 - **日期**：统一 `YYYY-MM-DD`，不再按年份切换 `MM-DD`
-- **总计**：最前面一张 `all models` 表，列为 `Date / Tokens / Cache% / Cost / TTFT / Speed`；合并全部有价 provider / 模型，无价格行
+- **总计**：最前面一张 `all models` 表，列为 `Date / Tokens / Chart / Cache% / Cost / TTFT / Speed`；合并全部有价 provider / 模型，无价格行
 - **分组**：每 (provider, 统一模型名) 一组；组头一行 `provider · 模型`（如 `deepseek-official · deepseek-v4.1-flash`，provider 源里没有则为 `unknown`），紧接一行该模型的 `price:`（三项单价，元/百万 token，查不到显示 `—`），组间空一行
-- **组内**：首行表头（`Date / Tokens / Cache% / Cost / TTFT / Speed`），然后每天一行（日期升序），末行 `Total`
-- **对齐**：文本列左对齐（日期），数字列一律右对齐（千分位分隔），表头与所在列对齐方式一致；列间距 2 个空格
+- **组内**：首行表头（`Date / Tokens / Chart / Cache% / Cost / TTFT / Speed`），然后每天一行（日期升序），末行 `Total`
+- **Chart**：所有表共用同一最大日 token 值，最大值填满整条；宽度按终端剩余空间在 8–30 列之间自适应；`Total` 行显示 `—`
+- **对齐**：日期与 Chart 左对齐，数字列一律右对齐（千分位分隔），表头与所在列对齐方式一致；列间距 2 个空格
 - **列宽**：总计表与全部分组表共用一套列宽——把所有行放在一起取每列最大值，保证整段输出纵向对齐
 - **空值**：无数据的指标输出 `—`，不留空、不写 0
 - **未知模型**：查不到人民币价的模型**不出总计表与分组表**，只在全部组之后一行列出 provider/model（`unknown models (no CNY pricing): provider/model, ...`），便于补价

@@ -12,6 +12,8 @@ export interface Style {
   title(text: string): string;
   /** 表头与 Total 行：bold */
   header(text: string): string;
+  /** Tokens 柱状图：cyan */
+  bar(text: string): string;
   /** price 行等次要信息：dim */
   dim(text: string): string;
   /** 未知模型等提示：yellow */
@@ -24,6 +26,7 @@ export interface Style {
 export const plainStyle: Style = {
   title: (text) => text,
   header: (text) => text,
+  bar: (text) => text,
   dim: (text) => text,
   warning: (text) => text,
   error: (text) => text,
@@ -42,6 +45,7 @@ export function createStyle(mode: ColorMode): Style {
   return {
     title: (text) => chalk.bold.cyan(text),
     header: (text) => chalk.bold(text),
+    bar: (text) => chalk.cyan(text),
     dim: (text) => chalk.dim(text),
     warning: (text) => chalk.yellow(text),
     error: (text) => chalk.red(text),

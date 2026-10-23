@@ -54,7 +54,8 @@ async function runDaily(options: DailyOptions): Promise<void> {
       .map((group) => `${group.provider}/${group.model}`);
 
     if (known.length > 0) {
-      console.log(renderOutput(overall(known), known, style));
+      const width = process.stdout.columns ?? 80;
+      console.log(renderOutput(overall(known), known, style, width));
     }
     if (unknown.length > 0) {
       if (known.length > 0) console.log("");
