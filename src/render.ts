@@ -1,28 +1,31 @@
-// 分组表格渲染：全英文文案、纯空格对齐、无装饰线
-// 价格行只读 ModelGroup.pricing，渲染层不重算价格
+// 表格渲染：全英文文案、纯空格对齐、无装饰线
+// 日期统一 YYYY-MM-DD；总计表与所有分组表共用同一套列宽，保证整段输出纵向对齐；
+// 表格合并 token 统计（input + output + reasoning + cache_read + cache_write），不再输出 Per 1M；
+// 价格行只读 ModelGroup.pricing，渲染层不重算价格。
 
-import type { DayRow, ModelGroup } from "./types";
+import type { DayRow, ModelGroup, Overall } from "./types";
 import type { ModelPricing } from "./pricing";
 
-const HEADERS = ["Date", "Input", "Output", "Cache", "Cache%", "Cost", "Per 1M", "TTFT", "Speed"] as const;
+const HEADERS = ["Date", "Tokens", "Cache%", "Cost", "TTFT", "Speed"] as const;
 /** Date 左对齐，其余右对齐 */
-const RIGHT = [false, true, true, true, true, true, true, true, true];
+const RIGHT = [false, true, true, true, true, true];
 
 const fmtInt = (n: number): string => n.toLocaleString("en-US");
 
-/** 一行的展示值；Output 含 reasoning，Cache 含 read+write */
+/** 展示用总 token：output 与 reasoning 互斥，合并计入；cache 含 read+write */
+function totalTokens(row: DayRow): number {
+  return row.input + row.output + row.reasoning + row.cache_read + row.cache_write;
+}
+
+/** 一行的展示值；空值用 —，不写 0 */
 function rowCells(row: DayRow, label: string): string[] {
-  const output = row.output + row.reasoning;
+  const tokens = totalTokens(row);
   const cache = row.cache_read + row.cache_write;
-  const total = row.input + output + cache;
   return [
     label,
-    fmtInt(row.input),
-    fmtInt(output),
-    fmtInt(cache),
-    total > 0 ? `${((cache / total) * 100).toFixed(1)}%` : "—",
+    fmtInt(tokens),
+    tokens > 0 ? `${((cache / tokens) * 100).toFixed(1)}%` : "—",
     `¥${row.cost.toFixed(3)}`,
-    total > 0 ? `¥${((row.cost / total) * 1e6).toFixed(2)}` : "—",
     row.ttftCount > 0 ? `${(row.ttftSumMs / row.ttftCount / 1000).toFixed(1)}s` : "—",
     row.genMs > 0 ? `${Math.round((row.speedTokens / row.genMs) * 1000)}/s` : "—",
   ];
@@ -39,6 +42,21 @@ function joinRow(cells: readonly string[], widths: readonly number[]): string {
     .trimEnd();
 }
 
+/** 表格主体：表头 + 每日行 + Total 行；列宽由调用方统一传入 */
+function tableLines(
+  days: readonly DayRow[],
+  total: DayRow,
+  widths: readonly number[],
+): string[] {
+  const rows: string[][] = [];
+  for (const day of days) rows.push(rowCells(day, day.date));
+  rows.push(rowCells(total, "Total"));
+
+  const lines = [joinRow([...HEADERS], widths)];
+  for (const row of rows) lines.push(joinRow(row, widths));
+  return lines;
+}
+
 /** 组头下的价格行：单位 元 / 百万 token；未知模型（入口未取到价）显示 — */
 function priceLine(pricing: ModelPricing | undefined): string {
   if (!pricing) return "price: —";
@@ -49,33 +67,39 @@ function priceLine(pricing: ModelPricing | undefined): string {
   );
 }
 
-export function render(groups: readonly ModelGroup[]): string {
-  const lines: string[] = [];
+/** 计算全段输出共用的列宽：总计表与全部分组表的行都参与取最大值 */
+function sharedWidths(
+  value: Overall,
+  groups: readonly ModelGroup[],
+): number[] {
+  const rows: string[][] = [];
+  for (const day of value.days) rows.push(rowCells(day, day.date));
+  rows.push(rowCells(value.total, "Total"));
+  for (const group of groups) {
+    for (const day of group.days) rows.push(rowCells(day, day.date));
+    rows.push(rowCells(group.total, "Total"));
+  }
 
-  // 年份一致时日期显示 MM-DD，跨年则显示完整 YYYY-MM-DD
-  const years = new Set<string>();
-  for (const g of groups) for (const d of g.days) years.add(d.date.slice(0, 4));
-  const shortDates = years.size <= 1;
+  return HEADERS.map((header, i) =>
+    Math.max(header.length, ...rows.map((row) => row[i]?.length ?? 0)),
+  );
+}
 
-  groups.forEach((g, gi) => {
-    if (gi > 0) lines.push("");
-    lines.push(`${g.provider} · ${g.model}`);
-    lines.push(priceLine(g.pricing));
+/** 全段输出：总计表、空行、各分组表；所有表格共用同一套列宽 */
+export function renderOutput(value: Overall, groups: readonly ModelGroup[]): string {
+  const widths = sharedWidths(value, groups);
+
+  const lines: string[] = [
+    "all models",
+    ...tableLines(value.days, value.total, widths),
+  ];
+  for (const group of groups) {
     lines.push("");
-
-    const rows: string[][] = [];
-    for (const d of g.days) {
-      const label = shortDates ? d.date.slice(5) : d.date;
-      rows.push(rowCells(d, label));
-    }
-    rows.push(rowCells(g.total, "Total"));
-
-    const widths = HEADERS.map((h, i) =>
-      Math.max(h.length, ...rows.map((r) => r[i]?.length ?? 0)),
-    );
-    lines.push(joinRow([...HEADERS], widths));
-    for (const r of rows) lines.push(joinRow(r, widths));
-  });
+    lines.push(`${group.provider} · ${group.model}`);
+    lines.push(priceLine(group.pricing));
+    lines.push("");
+    lines.push(...tableLines(group.days, group.total, widths));
+  }
 
   return lines.join("\n");
 }

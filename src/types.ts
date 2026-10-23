@@ -16,7 +16,7 @@ export interface Usage {
 export interface UsageEvent {
   source: Source;
   session: string;
-  /** 计价模型名（价格表的键） */
+  /** 统一模型名（价目表的键；未知模型保留源里的原名） */
   model: string;
   /** 所属 provider（网关 / 套餐名，如 opencode-go、deepseek-official），分组键之一；源无此字段则缺省 */
   provider?: string;
@@ -68,6 +68,12 @@ export interface ModelGroup {
   model: string;
   /** 该模型结算用的价格（组内事件共享），供渲染展示 */
   pricing?: ModelPricing;
+  days: DayRow[];
+  total: DayRow;
+}
+
+/** 跨 provider / 模型的每日合计，用于输出最前面的总计表 */
+export interface Overall {
   days: DayRow[];
   total: DayRow;
 }

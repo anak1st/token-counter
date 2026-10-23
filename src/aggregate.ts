@@ -1,7 +1,7 @@
-// 内存聚合：按 (provider, 模型, 本地日期) 分桶，每组末尾折出 Total 行
+// 内存聚合：按 (provider, 统一模型名, 本地日期) 分桶，每组末尾折出 Total 行
 // provider 是分组键之一：同一模型来自不同 provider（网关/套餐）时分开成组
 
-import type { DayRow, ModelGroup, UsageEvent } from "./types";
+import type { DayRow, ModelGroup, Overall, UsageEvent } from "./types";
 import type { ModelPricing } from "./pricing";
 import { dayKey } from "./time";
 
@@ -42,7 +42,7 @@ function fold(target: DayRow, row: DayRow): void {
 export function aggregate(events: Iterable<UsageEvent>): ModelGroup[] {
   // 外层 key = provider，内层 key = model；值为 日期 → 行
   const byProvider = new Map<string, Map<string, Map<string, DayRow>>>();
-  // 同一 (provider, 模型) 的事件共享同一份入口结算价格，取首个事件的即可
+  // 同一 (provider, 统一模型名) 的事件共享同一份入口结算价格，取首个事件的即可
   const pricingByKey = new Map<string, ModelPricing | undefined>();
 
   for (const e of events) {
@@ -99,4 +99,24 @@ export function aggregate(events: Iterable<UsageEvent>): ModelGroup[] {
     }
   }
   return groups;
+}
+
+/** 跨分组合计：把所有 (provider, model) 的每日行按日期合并，末尾折出合计行 */
+export function overall(groups: readonly ModelGroup[]): Overall {
+  const byDay = new Map<string, DayRow>();
+  for (const group of groups) {
+    for (const row of group.days) {
+      let merged = byDay.get(row.date);
+      if (!merged) {
+        merged = emptyRow(row.date);
+        byDay.set(row.date, merged);
+      }
+      fold(merged, row);
+    }
+  }
+
+  const days = [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date));
+  const total = emptyRow("total");
+  for (const row of days) fold(total, row);
+  return { days, total };
 }

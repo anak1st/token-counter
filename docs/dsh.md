@@ -119,7 +119,7 @@ usage 事件本身不带模型，模型在：
 
 一个会话内模型可能变化（按 `request/context` 出现的 seq 分段归属）。
 
-**模型命名**：DeepSeek 2026-09-10 起统一为 `deepseek-flash`（无版本号）；老会话里可能出现 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp`，官方已把它们路由到同一价格。计费时通过 `pricing.ts` 的 `aliases` 归一即可。
+**模型命名**：源里会出现 `deepseek-flash`（2026-09-10 起的无版本名）、`deepseek-v4.1-flash`，以及更老的 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`。adapter 入口用 `pricing.ts` 的 `identifyModel` 统一归到 `deepseek-v4.1-flash`（最新版本）；`deepseek-flash` 等旧名保留在 `aliases` 里，分组与展示都用统一名。
 
 ## 事件通用结构
 

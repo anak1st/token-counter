@@ -9,7 +9,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { DateRange, Usage, UsageEvent } from "../types";
-import { calcCost, resolveModel } from "../pricing";
+import { calcCost, identifyModel } from "../pricing";
 
 /** 单步的起止时刻（step/start 记 start，step/end 记 end） */
 interface StepState {
@@ -35,7 +35,7 @@ function stepKey(data: { turn?: number; step?: number } | undefined): string | u
   return `${data.turn}:${data.step}`;
 }
 
-/** usage → 归一化事件：按模型名结算 cost 与 pricing */
+/** usage → 归一化事件：模型名归一到统一名后结算 cost 与 pricing */
 function buildEvent(
   state: FileState,
   ts: number,
@@ -48,19 +48,19 @@ function buildEvent(
     cache_read: Number(u.cacheReadTokens ?? 0),
     cache_write: Number(u.cacheWriteTokens ?? 0),
   };
-  const pricing = resolveModel(state.model);
+  const identity = identifyModel(state.model);
   let cost = 0;
-  if (pricing) cost = calcCost(pricing, usage);
+  if (identity.pricing) cost = calcCost(identity.pricing, usage);
   const event: UsageEvent = {
     source: "dsh",
     session: state.sessionId,
     provider: state.provider,
-    model: state.model,
+    model: identity.name,
     ts,
     usage,
     cost,
   };
-  if (pricing) event.pricing = pricing;
+  if (identity.pricing) event.pricing = identity.pricing;
   return event;
 }
 

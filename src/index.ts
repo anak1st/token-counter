@@ -5,8 +5,8 @@ import { scanDsh } from "./adapters/dsh";
 import { scanMimo } from "./adapters/mimo";
 import { scanZcode } from "./adapters/zcode";
 import { scanOpencode } from "./adapters/opencode";
-import { aggregate } from "./aggregate";
-import { render } from "./render";
+import { aggregate, overall } from "./aggregate";
+import { renderOutput } from "./render";
 import type { DateRange, Source, UsageEvent } from "./types";
 
 /** 源 → 扫描器注册表；新增数据源在此登记（与 cli 的源名单保持同步） */
@@ -47,7 +47,10 @@ async function main(): Promise<void> {
     .filter((g) => g.pricing === undefined)
     .map((g) => `${g.provider}/${g.model}`);
 
-  if (known.length > 0) console.log(render(known));
+  // 先输出合并所有 provider / 模型的总计，再输出分组明细；两者共用列宽
+  if (known.length > 0) {
+    console.log(renderOutput(overall(known), known));
+  }
   if (unknown.length > 0) {
     if (known.length > 0) console.log("");
     console.log(`unknown models (no CNY pricing): ${unknown.join(", ")}`);

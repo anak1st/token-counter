@@ -6,7 +6,7 @@
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
-import { calcCost, resolveModel } from "../pricing";
+import { calcCost, identifyModel } from "../pricing";
 
 /** model_usage 表行（列名同库） */
 interface UsageRow {
@@ -63,10 +63,9 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
       // cancelled 行 usage 全为 0，跳过以免生成空日期行
       if (usage.input + usage.output + usage.cache_read + usage.cache_write === 0) continue;
 
-      const model = row.model_id;
-      const pricing = resolveModel(model);
+      const identity = identifyModel(row.model_id);
       let cost = 0;
-      if (pricing) cost = calcCost(pricing, usage);
+      if (identity.pricing) cost = calcCost(identity.pricing, usage);
 
       // status=cancelled 或用户主动取消的行保留部分用量，标记为中止
       const aborted = row.status === "cancelled" || row.cancelled_by_user === 1;
@@ -81,12 +80,12 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
       const event: UsageEvent = {
         source: "zcode",
         session: row.session_id,
-        model,
+        model: identity.name,
         ts: row.started_at,
         usage,
         cost,
       };
-      if (pricing) event.pricing = pricing;
+      if (identity.pricing) event.pricing = identity.pricing;
       if (row.provider_id !== null) event.provider = row.provider_id;
       if (row.agent !== null) event.agent = row.agent;
       if (row.turn_id !== null) event.turn = row.turn_id;

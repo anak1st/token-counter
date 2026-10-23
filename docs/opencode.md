@@ -72,6 +72,7 @@ file:~/.local/share/opencode/opencode.db?mode=ro
   `name`、`family`、`canonical_model_id`、`cost`（**美元**）、`limit`、`modalities`、`reasoning` 等
 - **`canonical_model_id` 是跨 provider 的全局身份**：如 `opencode-go/deepseek-v4.1-flash` 的
   `canonical_model_id = "deepseek/deepseek-v4.1-flash"`，与官方 `deepseek` provider 的 `deepseek-flash` 同源
+  （二者在 `pricing.ts` 里都归一到统一名 `deepseek-v4.1-flash`）
 - `opencode-go` / `opencode` 本身是**多模型网关**（catalog 里分别 37 / 122 个模型，
   涵盖 claude / gpt / gemini / deepseek / mimo / glm 等），所以**计价只认 `model.id`，不看 providerID**
 - `credential` 表存 provider 凭证（不读取）
@@ -104,18 +105,24 @@ file:~/.local/share/opencode/opencode.db?mode=ro
 
 ## 模型与价格
 
-本机数据（库为本机新建，仅今日）只有一种组合：
+本机数据（截至 2026-10-17）有以下组合：
 
 | providerID | model.id | 说明 |
 |---|---|---|
 | `opencode-go` | `deepseek-v4.1-flash` | OpenCode Go 网关代理的 DeepSeek 模型 |
+| `opencode` | `deepseek-v4.1-flash-free` | 免费档，归一到 `deepseek-v4.1-flash` |
+| `opencode` | `glm-5.3-flash-free` | 免费档，归一到 `GLM-5.3-Flash` |
 
 - **网关美元价（仅参考，不采信）**：`opencode-go` 的该模型与 catalog 里官方 `deepseek` 条目**同价**
   （$0.15 / $0.6 / $0.003，reasoning 按 output 计；`opencode` 网关为其两倍）
-- **人民币结算**：按 `model.id` 平铺查 `pricing.ts`，命中 `deepseek` 分组下的 `deepseek-flash`
-  （未命中 **¥2** / 命中 **¥0.04** / 输出 **¥8** per 1M）；`deepseek-v4.1-flash` 已在 alias 里归一到 `deepseek-flash`
+- **模型名归一**：`pricing.ts` 的 `identifyModel` 先匹配价目表的键、再走 aliases；免费档别名显式写在
+  对应模型的 `aliases` 里（`deepseek-v4.1-flash-free` 在 DeepSeek 条目、`glm-5.3-flash-free` 在 GLM 条目），
+  不做后缀推断，因此二者分别归一到 `deepseek-v4.1-flash`、`GLM-5.3-Flash`
+- **人民币结算**：按统一名平铺查 `pricing.ts`，DeepSeek 命中 `deepseek` 分组下的 `deepseek-v4.1-flash`
+  （未命中 **¥2** / 命中 **¥0.04** / 输出 **¥8** per 1M）；`deepseek-flash`、`deepseek-v4-flash` 等历史名已在 aliases 里归一到它
+- 免费档与付费档合并为同一模型组，费用仍按该模型的人民币刊例价估算（当前不单独记 ¥0）
 - 人民币刊例价与源美元价**不是汇率换算**（约为其 13.3 倍，含高峰价口径），此处统一按人民币刊例价折算
-- 查不到 model id 的模型不出表格，只在输出末尾一行列出 id
+- 归一后仍查不到价的 model id 不出表格，只在输出末尾一行列出
 
 ## 数据覆盖
 
