@@ -174,7 +174,8 @@ export const PRICING: PricingTable = {
     },
   },
   google: {
-    // Google AI 官方美元价；无官方人民币价，不换汇
+    // Google AI 官方美元价（ai.google.dev/gemini-api/docs/pricing）；无官方人民币价，不换汇
+    // 有限期促销/首发价的模型按项目惯例统一用常规价结算，首发价仅在注释与 docs/agy.md 中备查
     "gemini-4-hydrogen": {
       usd: {
         input_cache_miss: 1.50,
@@ -182,8 +183,104 @@ export const PRICING: PricingTable = {
         output: 7.50,
       },
       aliases: [
+        "gemini-4-hydrogen-low",
+        "gemini-4-hydrogen-medium",
         "gemini-4-hydrogen-high",
+        "Gemini 4 Hydrogen",
+        "Gemini 4 Hydrogen (Low)",
+        "Gemini 4 Hydrogen (Medium)",
         "Gemini 4 Hydrogen (High)",
+      ],
+    },
+    "gemini-4-neon": {
+      usd: {
+        input_cache_miss: 3.00,
+        input_cache_hit: 0.15,
+        output: 15.00,
+      },
+      aliases: [
+        "gemini-4-neon-low",
+        "gemini-4-neon-medium",
+        "gemini-4-neon-high",
+        "Gemini 4 Neon",
+        "Gemini 4 Neon (Low)",
+        "Gemini 4 Neon (Medium)",
+        "Gemini 4 Neon (High)",
+      ],
+    },
+    // 常规价（2026-12-01 起）；2026-11-30 前首发优惠为 $2.00 / $0.10 / $10.00
+    "gemini-4-argon": {
+      usd: {
+        input_cache_miss: 4.00,
+        input_cache_hit: 0.20,
+        output: 20.00,
+      },
+      aliases: [
+        "gemini-4-argon-low",
+        "gemini-4-argon-medium",
+        "gemini-4-argon-high",
+        "Gemini 4 Argon",
+        "Gemini 4 Argon (Low)",
+        "Gemini 4 Argon (Medium)",
+        "Gemini 4 Argon (High)",
+      ],
+    },
+    // 常规价（2026-12-01 起）；2026-11-30 前首发优惠为 $2.00 / $0.10 / $10.00
+    "gemini-4-carbon": {
+      usd: {
+        input_cache_miss: 4.00,
+        input_cache_hit: 0.20,
+        output: 20.00,
+      },
+      aliases: [
+        "gemini-4-carbon-low",
+        "gemini-4-carbon-medium",
+        "gemini-4-carbon-high",
+        "Gemini 4 Carbon",
+        "Gemini 4 Carbon (Low)",
+        "Gemini 4 Carbon (Medium)",
+        "Gemini 4 Carbon (High)",
+      ],
+    },
+    // 常规价（2027-01-01 起）；2026-12-31 前首发优惠为 $0.75 / $0.075 / $3.75；3.7 Flash 同价
+    "gemini-3.8-flash": {
+      usd: {
+        input_cache_miss: 1.50,
+        input_cache_hit: 0.15,
+        output: 7.50,
+      },
+      aliases: [
+        "gemini-3.7-flash",
+        "gemini-3.8-flash-low",
+        "gemini-3.8-flash-medium",
+        "gemini-3.8-flash-high",
+        "Gemini 3.8 Flash",
+        "Gemini 3.8 Flash (Low)",
+        "Gemini 3.8 Flash (Medium)",
+        "Gemini 3.8 Flash (High)",
+      ],
+    },
+    "gemini-3.5-flash-lite": {
+      usd: {
+        input_cache_miss: 0.30,
+        input_cache_hit: 0.03,
+        output: 2.50,
+      },
+      aliases: [
+        "Gemini 3.5 Flash-Lite",
+      ],
+    },
+    // <=200k 上下文常规价
+    "gemini-3.1-pro-preview": {
+      usd: {
+        input_cache_miss: 2.00,
+        input_cache_hit: 0.20,
+        output: 12.00,
+      },
+      aliases: [
+        "gemini-3.1-pro",
+        "Gemini 3.1 Pro",
+        "Gemini 3.1 Pro (High)",
       ],
     },
   },

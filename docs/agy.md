@@ -97,18 +97,24 @@
 
 ## 模型与价格
 
-本机数据中出现的模型（`provider` 统一记为 `google`）：
+本机数据与 Antigravity / Google Gemini API 常见模型（`provider` 统一记为 `google`，均无官方人民币价，仅以美元计价与展示）：
 
-| 模型 ID | 展示名 | 官方美元价（per 1M tok） | 官方人民币价 |
-|---|---|---|---|
-| `gemini-4-hydrogen` | `Gemini 4 Hydrogen (High)` | 未命中 `$1.50` / 命中 `$0.075` / 输出 `$7.50` | 无（不换汇） |
+| 模型 ID | 常规美元价（in miss / hit / out per 1M tok） | 备注 |
+|---|---|---|
+| `gemini-4-hydrogen` | `$1.50 / $0.075 / $7.50` | 本机实测已出现（`(High)`） |
+| `gemini-4-neon` | `$3.00 / $0.15 / $15.00` | 本机实测已出现（`(Medium)`） |
+| `gemini-4-argon` | `$4.00 / $0.20 / $20.00` | 2026-11-30 前首发价 `$2.00 / $0.10 / $10.00`，按项目惯例取常规价 |
+| `gemini-4-carbon` | `$4.00 / $0.20 / $20.00` | 2026-11-30 前首发价 `$2.00 / $0.10 / $10.00`，按项目惯例取常规价 |
+| `gemini-3.8-flash` | `$1.50 / $0.15 / $7.50` | 2026-12-31 前首发价 `$0.75 / $0.075 / $3.75`，按项目惯例取常规价；含 `gemini-3.7-flash` 别名 |
+| `gemini-3.5-flash-lite` | `$0.30 / $0.03 / $2.50` | 轻量低延迟档 |
+| `gemini-3.1-pro-preview` | `$2.00 / $0.20 / $12.00` | `<=200k` 上下文常规价 |
 
-- `gemini-4-hydrogen` 无官方人民币定价，按项目规则不进行汇率换算，仅以美元计价与展示。
-- 思考档位后缀名（如 `gemini-4-hydrogen-high`、`Gemini 4 Hydrogen (High)`）显式列在 `aliases` 中归一到 `gemini-4-hydrogen`。
+- 以上模型均无官方人民币定价，按项目规则不进行汇率换算，仅以美元计价与展示。
+- 思考档位后缀名（如 `-low` / `-medium` / `-high` 与展示名）均逐个显式列在 `aliases` 中归一到对应统一模型名。
 
 ## 数据覆盖
 
-- 本机现有 3 个会话库（`7ddb2cc5`、`228ca72a`、`4c0d6b82`），均始于 **2026-11-22**。
+- 本机现有 6 个会话库，始于 **2026-11-22**，已实测覆盖 `gemini-4-hydrogen` 与 `gemini-4-neon`。
 - `has_subtrajectory` 实测均为 0；若后续产生子代理，Antigravity 会为子代理分配独立 `conversation_id` 与 `.db` 文件，遍历 `conversations/*.db` 可自然覆盖且不重计。
 
 ## 验证过的查询
