@@ -13,10 +13,10 @@ token-counter daily --agent mimo --last 30
 ```
 
 - 子命令：`daily` 输出按天明细；`hourly` / `summary` 已预留命令位，只接受 `--agent`，不接受日期范围，暂未实现
-- 数据源由 `--agent` 必填指定（`mimo` / `dsh` / `zcode` / `opencode`）：只跑被选中的那个 adapter，不查的源完全不访问
+- 数据源由 `--agent` 必填指定（`mimo` / `dsh` / `zcode` / `opencode` / `agy`）：只跑被选中的那个 adapter，不查的源完全不访问
 - **无本地存储**：每次查询直接读数据源，算完即走，不留库、不留状态
 
-输出为**总计 + 分组多表**：先一张合并所有 provider / 模型的每日总计，再每 (provider, 统一模型名) 一组，组内每天一行，竖向排列。**输出文案全部用英文**（中文双字节不利于对齐），仅费用用人民币 `¥`；纯文本对齐，不画装饰线：
+输出为**总计 + 分组多表**：先一张合并所有 provider / 模型的每日总计，再每 (provider, 统一模型名) 一组，组内每天一行，竖向排列。**输出文案全部用英文**（中文双字节不利于对齐），费用为 `$USD (¥RMB)`（无官方人民币价时仅 `$USD`，不换汇）；纯文本对齐，不画装饰线：
 
 ```
 all models
@@ -49,7 +49,7 @@ Total       1,071,373  —                          91.3%  ¥0.357  4.1s   38/s
 | # | 约束 | 来源 | 影响 |
 |---|---|---|---|
 | 1 | 两源形态迥异：活的 SQLite vs zstd 压缩事件流 | mimo / dsh | adapter 层隔离差异，核心只认归一化事件 |
-| 2 | mimo/opencode 的 cost 字段是美元，dsh 没有 cost | 各源 | 一律查 `pricing.ts` 人民币价在入口结算，不采信源 cost、不做汇率换算 |
+| 2 | mimo/opencode 的 cost 字段不可直接混用，dsh/zcode/agy 没有 cost | 各源 | 一律查 `pricing.ts` 官方美元/人民币价在入口结算，不采信源 cost、不做汇率换算 |
 | 3 | dsh 历史上有三种格式，仅 v4 在持续写入 | docs/dsh.md | adapter 只解析 v4，旧格式静默跳过 |
 | 4 | 同一事实存在双视角（mimo 的 message vs part；dsh 事件流 vs 聚合缓存） | 两侧 | 每源指定唯一主源，只从一处取数 |
 | 5 | 数据源必须只读：mimo 是 WAL 活库，dsh 正被 desk 写入 | 两侧 | 只读打开，写操作不存在（连本地库都没有） |
@@ -111,6 +111,7 @@ Total       1,071,373  —                          91.3%  ¥0.357  4.1s   38/s
 - dsh：只读事件流，usage 只取 `data.usage` 一处（忽略 `data.stream` 内的重复副本）；聚合缓存不参与取数
 - zcode：只读 `model_usage` 表（与 `turn_usage` 是双视角，只取前者）
 - opencode：只读 `session_message` 的 assistant 行；会话级汇总 `session_v2` 不参与（与消息求和不等，见 opencode.md）
+- agy：只读 `conversations/*.db` 的 `steps`（`step_type = 15`）与 `gen_metadata`；`brain/*/transcript.jsonl` 不参与取数
 
 一次查询内每个事实只被读一次，无需事件级去重。
 
@@ -136,16 +137,16 @@ Total       1,071,373  —                          91.3%  ¥0.357  4.1s   38/s
 - **对齐**：日期与 Chart 左对齐，数字列一律右对齐（千分位分隔），表头与所在列对齐方式一致；列间距 2 个空格
 - **列宽**：总计表与全部分组表共用一套列宽——把所有行放在一起取每列最大值，保证整段输出纵向对齐
 - **空值**：无数据的指标输出 `—`，不留空、不写 0
-- **未知模型**：查不到人民币价的模型**不出总计表与分组表**，只在全部组之后一行列出 provider/model（`unknown models (no CNY pricing): provider/model, ...`），便于补价
-- **精度**：token 整数带千分位；费用 3 位小数带 `¥`；TTFT 1 位小数带 `s`；速度整数带 `/s`；百分比 1 位小数带 `%`
+- **未知模型**：查不到定价的模型**不出总计表与分组表**，只在全部组之后一行列出 provider/model（`unknown models (no pricing): provider/model, ...`），便于补价
+- **精度**：token 整数带千分位；费用 3 位小数，格式 `$USD (¥RMB)`（缺官方人民币价时仅 `$USD`）；TTFT 1 位小数带 `s`；速度整数带 `/s`；百分比 1 位小数带 `%`
 - 终端输出纯文本；将来 `--json` 直接吐结构化数据，格式化只属于人类输出层
 
 ## 7. 速度指标口径
 
-| 指标 | 定义 | mimo 原料 | dsh 原料 | zcode 原料 | opencode 原料 |
-|---|---|---|---|---|---|
-| TTFT | 首 token 延迟，取当日均值 | step-start part 时间 − 消息 `time.created`（**近似**：含请求构建，库不存流式首包） | `stream[]` 首个分块 time − 同 step 的 `step/start` time | `time_to_first_token_ms`（真实流式测量） | 首个 `reasoning` part 的 `time.created` − 消息 `time.created`（**近似**） |
-| 平均输出速度 | 带时长样本的 output tokens ÷ 这些样本的纯解码耗时（剔除 TTFT 与工具执行，分子分母同源） | step-start part → 流结束（reasoning/text/patch 的 `time_updated`、tool 的 `time_created`） | `stream[]` 末块 − 首块（无分块时退回 step 跨度） | `duration_ms − time_to_first_token_ms`（无 TTFT 时退回 `duration_ms`） | `time.streamed` − 首个 part 的 `time.created`（`streamed` 是流结束时刻；`text` part 无时间戳，无 reasoning 的消息无样本） |
+| 指标 | 定义 | mimo 原料 | dsh 原料 | zcode 原料 | opencode 原料 | agy 原料 |
+|---|---|---|---|---|---|---|
+| TTFT | 首 token 延迟，取当日均值 | step-start part 时间 − 消息 `time.created`（**近似**：含请求构建，库不存流式首包） | `stream[]` 首个分块 time − 同 step 的 `step/start` time | `time_to_first_token_ms`（真实流式测量） | 首个 `reasoning` part 的 `time.created` − 消息 `time.created`（**近似**） | `gen_metadata.f1.11`（退回 `steps` `f6 - f1`） |
+| 平均输出速度 | 带时长样本的 output tokens ÷ 这些样本的纯解码耗时（剔除 TTFT 与工具执行，分子分母同源） | step-start part → 流结束（reasoning/text/patch 的 `time_updated`、tool 的 `time_created`） | `stream[]` 末块 − 首块（无分块时退回 step 跨度） | `duration_ms − time_to_first_token_ms`（无 TTFT 时退回 `duration_ms`） | `time.streamed` − 首个 part 的 `time.created`（`streamed` 是流结束时刻；`text` part 无时间戳，无 reasoning 的消息无样本） | `gen_metadata.f1.12`（退回 `steps` `f7 - f6`） |
 
 - 各源的 Speed 统一为纯解码速度，可与 dsh 自带的 `decodeTokens ÷ decodeMs` 直接对比（实测差约 10%，来自分块标记粒度）；mimo 与 opencode 的 TTFT 是近似值
 - 当日没有速度原料的行（如纯缓存命中、零输出）输出 `—` 而非 0

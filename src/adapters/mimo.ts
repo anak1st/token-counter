@@ -7,7 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
-import { calcCost, identifyModel } from "../pricing";
+import { calcCost, identifyModel, type Cost } from "../pricing";
 
 /** message 表行（data 为 JSON，见 scanMimo 内的字段类型） */
 interface MsgRow {
@@ -114,7 +114,7 @@ export async function* scanMimo(range: DateRange): AsyncGenerator<UsageEvent> {
       if (total === 0) continue;
 
       const identity = identifyModel(model);
-      let cost = 0;
+      let cost: Cost = {};
       if (identity.pricing) cost = calcCost(identity.pricing, usage);
 
       const ts = data.time?.created ?? row.time_created;

@@ -1,10 +1,11 @@
 // 表格渲染：全英文文案、纯空格对齐、无装饰线
 // 日期统一 YYYY-MM-DD；总计表与所有分组表共用同一套列宽，保证整段输出纵向对齐；
 // Tokens 后新增 Chart 列：所有表共用同一最大值，最大 token 行填满整条；
+// 费用格式为 "$USD (¥RMB)"，无官方人民币价时只输出 "$USD"，不做汇率换算；
 // 颜色只包裹补齐后的单元格/行，不参与列宽计算。
 
 import type { DayRow, ModelGroup, Overall } from "./types";
-import type { ModelPricing } from "./pricing";
+import type { ModelPricing, PriceTier } from "./pricing";
 import { plainStyle, type Style } from "./color";
 
 const HEADERS = ["Date", "Tokens", "Chart", "Cache%", "Cost", "TTFT", "Speed"] as const;
@@ -20,6 +21,20 @@ function totalTokens(row: DayRow): number {
   return row.input + row.output + row.reasoning + row.cache_read + row.cache_write;
 }
 
+/** 费用单元格：有双币种官方价时输出 "$USD (¥RMB)"，缺其一时只输出可用币种 */
+function formatCost(row: DayRow): string {
+  if (row.usdComplete && row.cnyComplete) {
+    return `$${row.costUsd.toFixed(3)} (¥${row.costCny.toFixed(3)})`;
+  }
+  if (row.usdComplete) {
+    return `$${row.costUsd.toFixed(3)}`;
+  }
+  if (row.cnyComplete) {
+    return `¥${row.costCny.toFixed(3)}`;
+  }
+  return "—";
+}
+
 /** 一行的基础展示值（不含 Chart 列）；空值用 —，不写 0 */
 function rowCells(row: DayRow, label: string): string[] {
   const tokens = totalTokens(row);
@@ -28,7 +43,7 @@ function rowCells(row: DayRow, label: string): string[] {
     label,
     fmtInt(tokens),
     tokens > 0 ? `${((cache / tokens) * 100).toFixed(1)}%` : "—",
-    `¥${row.cost.toFixed(3)}`,
+    formatCost(row),
     row.ttftCount > 0 ? `${(row.ttftSumMs / row.ttftCount / 1000).toFixed(1)}s` : "—",
     row.genMs > 0 ? `${Math.round((row.speedTokens / row.genMs) * 1000)}/s` : "—",
   ];
@@ -135,14 +150,33 @@ function tableLines(
   return lines;
 }
 
-/** 组头下的价格行：单位 元 / 百万 token；未知模型（入口未取到价）显示 — */
+/** 单价格式化：至少保留 2 位小数，低价位（如 $0.006 / $0.0028）保留有效位至最多 4 位 */
+function fmtUnit(n: number): string {
+  const trimmed = n.toFixed(4).replace(/0+$/, "");
+  const dot = trimmed.indexOf(".");
+  const decimals = dot === -1 ? 0 : trimmed.length - dot - 1;
+  return decimals < 2 ? n.toFixed(2) : trimmed;
+}
+
+/** 单档价格格式化："$USD (¥RMB)"，缺其一时只显示可用币种 */
+function fmtPair(usd: number | undefined, cny: number | undefined): string {
+  if (usd !== undefined && cny !== undefined) {
+    return `$${fmtUnit(usd)} (¥${fmtUnit(cny)})`;
+  }
+  if (usd !== undefined) return `$${fmtUnit(usd)}`;
+  if (cny !== undefined) return `¥${fmtUnit(cny)}`;
+  return "—";
+}
+
+/** 组头下的价格行：单位 美元 / 人民币 per 1M token；未知模型显示 — */
 function priceLine(pricing: ModelPricing | undefined): string {
-  if (!pricing) return "price: —";
-  return (
-    `price: in miss ¥${pricing.input_cache_miss.toFixed(2)}` +
-    ` / hit ¥${pricing.input_cache_hit.toFixed(2)}` +
-    ` / out ¥${pricing.output.toFixed(2)} per 1M tok`
-  );
+  if (!pricing || (!pricing.usd && !pricing.cny)) return "price: —";
+  const u: Partial<PriceTier> = pricing.usd ?? {};
+  const c: Partial<PriceTier> = pricing.cny ?? {};
+  const miss = fmtPair(u.input_cache_miss, c.input_cache_miss);
+  const hit = fmtPair(u.input_cache_hit, c.input_cache_hit);
+  const out = fmtPair(u.output, c.output);
+  return `price: in miss ${miss} / hit ${hit} / out ${out} per 1M tok`;
 }
 
 /** 全段输出：总计表、空行、各分组表；列宽与 Chart 刻度全局统一 */

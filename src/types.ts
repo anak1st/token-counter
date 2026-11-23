@@ -1,13 +1,13 @@
 // 归一化事件与聚合的类型定义
 
-import type { ModelPricing } from "./pricing";
+import type { Cost, ModelPricing } from "./pricing";
 
-export type Source = "mimo" | "dsh" | "zcode" | "opencode";
+export type Source = "mimo" | "dsh" | "zcode" | "opencode" | "agy";
 
 export interface Usage {
   input: number;
   output: number;
-  /** 思考 token：必须与 output 互斥——源若为包含关系（如 dsh 旧格式），adapter 归一扣除；拿不到则为 0 且留在 output 内 */
+  /** 思考 token：必须与 output 互斥——源若为包含关系（如 dsh 旧格式 / agy 内部汇总），adapter 归一扣除；拿不到则为 0 且留在 output 内 */
   reasoning: number;
   cache_read: number;
   cache_write: number;
@@ -18,7 +18,7 @@ export interface UsageEvent {
   session: string;
   /** 统一模型名（价目表的键；未知模型保留源里的原名） */
   model: string;
-  /** 所属 provider（网关 / 套餐名，如 opencode-go、deepseek-official），分组键之一；源无此字段则缺省 */
+  /** 所属 provider（网关 / 套餐名，如 opencode-go、deepseek-official、google），分组键之一；源无此字段则缺省 */
   provider?: string;
   /** 执行体（main / 子代理），turn 级统计按此过滤；源无此概念则缺省 */
   agent?: string;
@@ -29,8 +29,8 @@ export interface UsageEvent {
   /** 分桶时间戳（毫秒，按本地时区分天） */
   ts: number;
   usage: Usage;
-  /** 入口已结算的人民币费用 */
-  cost: number;
+  /** 入口已结算的双币种费用 */
+  cost: Cost;
   /** 入口结算时所用的价格（未知模型为 undefined）；随事件流转，下游只读 */
   pricing?: ModelPricing;
   /** 首 token 延迟样本（毫秒） */
@@ -54,7 +54,14 @@ export interface DayRow {
   reasoning: number;
   cache_read: number;
   cache_write: number;
-  cost: number;
+  /** 累加美元费用；仅当 usdComplete 为 true 时可展示 */
+  costUsd: number;
+  /** 累加人民币费用；仅当 cnyComplete 为 true 时可展示 */
+  costCny: number;
+  /** 当日/合计所含全部事件是否都有官方美元价 */
+  usdComplete: boolean;
+  /** 当日/合计所含全部事件是否都有官方人民币价 */
+  cnyComplete: boolean;
   ttftSumMs: number;
   ttftCount: number;
   genMs: number;

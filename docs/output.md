@@ -9,7 +9,7 @@
 - 最前面是**跨 provider / 模型的总计**，回答“这段时间整体花了多少、用了多少 token”。
 - 后面是**按 (provider, 统一模型名) 分组**的明细，保留现有分组逻辑。
 - token 统计合并成一列，不再拆 input / output / cache，也不再输出 Per 1M。
-- 输出全英文、纯空格对齐、无装饰线；费用一律人民币 `¥`。
+- 输出全英文、纯空格对齐、无装饰线；费用格式为 `$USD (¥RMB)`，无官方人民币价时仅显示 `$USD`（不做汇率换算）。
 
 不做：图表、交互式 TUI、Web、会话/预算/质量等报表。
 
@@ -43,7 +43,7 @@ Total       1,071,373  —                          91.3%  ¥0.357  4.1s   38/s
 | `Tokens` | 合并后的总 token，见 §4 |
 | `Chart` | Tokens 柱状图；所有表共用同一最大日 token 值，最大值填满；`Total` 显示 `—` |
 | `Cache%` | 缓存 token 占总 token 比例；无 token 时为 `—` |
-| `Cost` | 当日人民币费用，3 位小数；按价目表在 adapter 入口结算 |
+| `Cost` | 当日费用，3 位小数，格式 `$USD (¥RMB)`（缺官方人民币价时仅 `$USD`）；按价目表在 adapter 入口结算 |
 | `TTFT` | 当日平均首 token 延迟；无样本时为 `—` |
 | `Speed` | 当日平均输出速度（tokens/s）；无样本时为 `—` |
 
@@ -66,17 +66,17 @@ Tokens = input + output + reasoning + cache_read + cache_write
 每个分组的组头下保留一行：
 
 ```text
-price: in miss ¥2.00 / hit ¥0.04 / out ¥8.00 per 1M tok
+price: in miss $0.30 (¥2.00) / hit $0.006 (¥0.04) / out $1.20 (¥8.00) per 1M tok
 ```
 
 这是该模型的单价，不是每行费用；总计表没有价格行，因为合并了不同价目。
 
 ## 6. 未知模型
 
-查不到人民币价的模型不进入总计表与分组表，只在末尾输出一行：
+查不到定价的模型不进入总计表与分组表，只在末尾输出一行：
 
 ```text
-unknown models (no CNY pricing): provider/model, ...
+unknown models (no pricing): provider/model, ...
 ```
 
 保持现有行为，便于补价。

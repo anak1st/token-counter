@@ -9,6 +9,7 @@ import { scanDsh } from "./adapters/dsh";
 import { scanMimo } from "./adapters/mimo";
 import { scanZcode } from "./adapters/zcode";
 import { scanOpencode } from "./adapters/opencode";
+import { scanAgy } from "./adapters/agy";
 import { aggregate, overall } from "./aggregate";
 import { renderOutput } from "./render";
 import type { DateRange, Source, UsageEvent } from "./types";
@@ -19,6 +20,7 @@ const SCANNERS: Record<Source, (range: DateRange) => AsyncGenerator<UsageEvent>>
   dsh: scanDsh,
   zcode: scanZcode,
   opencode: scanOpencode,
+  agy: scanAgy,
 };
 
 /** 收齐一个源在区间内的事件；dsh 的 aborted 标记在 turn/end 才回填，不能边读边聚合 */
@@ -59,7 +61,7 @@ async function runDaily(options: DailyOptions): Promise<void> {
     }
     if (unknown.length > 0) {
       if (known.length > 0) console.log("");
-      console.log(style.warning(`unknown models (no CNY pricing): ${unknown.join(", ")}`));
+      console.log(style.warning(`unknown models (no pricing): ${unknown.join(", ")}`));
     }
   } catch (error) {
     fail(style, error);

@@ -9,7 +9,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { DateRange, Usage, UsageEvent } from "../types";
-import { calcCost, identifyModel } from "../pricing";
+import { calcCost, identifyModel, type Cost } from "../pricing";
 
 /** 单步的起止时刻（step/start 记 start，step/end 记 end） */
 interface StepState {
@@ -49,7 +49,7 @@ function buildEvent(
     cache_write: Number(u.cacheWriteTokens ?? 0),
   };
   const identity = identifyModel(state.model);
-  let cost = 0;
+  let cost: Cost = {};
   if (identity.pricing) cost = calcCost(identity.pricing, usage);
   const event: UsageEvent = {
     source: "dsh",

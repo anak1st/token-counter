@@ -6,7 +6,7 @@
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
-import { calcCost, identifyModel } from "../pricing";
+import { calcCost, identifyModel, type Cost } from "../pricing";
 
 /** model_usage 表行（列名同库） */
 interface UsageRow {
@@ -64,7 +64,7 @@ export async function* scanZcode(range: DateRange): AsyncGenerator<UsageEvent> {
       if (usage.input + usage.output + usage.cache_read + usage.cache_write === 0) continue;
 
       const identity = identifyModel(row.model_id);
-      let cost = 0;
+      let cost: Cost = {};
       if (identity.pricing) cost = calcCost(identity.pricing, usage);
 
       // status=cancelled 或用户主动取消的行保留部分用量，标记为中止

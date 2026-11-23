@@ -8,7 +8,7 @@ import type { DateRange, Source } from "./types";
 import { lastNDays, nextDayStart, parseDate } from "./time";
 
 /** --agent 的合法取值；与 SCANNERS 注册表保持一致 */
-const AGENTS: readonly Source[] = ["mimo", "dsh", "zcode", "opencode"];
+const AGENTS: readonly Source[] = ["mimo", "dsh", "zcode", "opencode", "agy"];
 
 export interface BaseOptions {
   agent: Source;

@@ -7,7 +7,7 @@
 
 import { Database } from "bun:sqlite";
 import type { DateRange, Usage, UsageEvent } from "../types";
-import { calcCost, identifyModel } from "../pricing";
+import { calcCost, identifyModel, type Cost } from "../pricing";
 
 /** assistant 消息的 data（只列 adapter 用到的字段） */
 interface MessageData {
@@ -81,7 +81,7 @@ export async function* scanOpencode(range: DateRange): AsyncGenerator<UsageEvent
       if (total === 0) continue;
 
       const identity = identifyModel(data.model?.id ?? "unknown");
-      let cost = 0;
+      let cost: Cost = {};
       if (identity.pricing) cost = calcCost(identity.pricing, usage);
 
       const ts = data.time?.created ?? row.time_created;

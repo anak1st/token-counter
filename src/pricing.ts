@@ -1,18 +1,33 @@
-// 价格表（内置常量，单位：元 / 百万 token，人民币）
-// 规则：不区分峰谷，统一按高峰价计算（使用时段以工作时间为主）；cache_write 按 input_cache_miss 价并入输入。
+// 价格表（内置常量，单位：美元 / 百万 token，人民币 / 百万 token）
+// 规则：以官方美元价为基准，同时在厂商公布官方人民币价时并列记录；不进行汇率换算，不采信源里带的 cost。
+// 不区分峰谷，统一按高峰/标准价计算；cache_write 按 input_cache_miss 价并入输入。
 // 模型名归一：价目表的键就是统一模型名（canonical），aliases 是同一模型的历史名 / 渠道名 / 免费档；
 // 免费档等别名逐个写在 aliases 里，不做后缀推断。查价先精确匹配键、再走 aliases；分组与展示都用统一名。
-// 厂商只用于价目表分组；源里带的 cost 一律不采信、不换汇，费用一律用本表结算。
 
-export interface ModelPricing {
+/** 单个币种的三档单价（per 1M tokens） */
+export interface PriceTier {
   /** 未命中缓存的输入价 */
   input_cache_miss: number;
   /** 命中缓存的输入价 */
   input_cache_hit: number;
   /** 输出价（reasoning 按此价计） */
   output: number;
+}
+
+/** 模型的双币种定价；厂商仅公布美元价时 cny 缺省 */
+export interface ModelPricing {
+  /** 官方美元价 */
+  usd?: PriceTier;
+  /** 官方人民币价（仅在厂商提供国内人民币定价时填写，不换汇） */
+  cny?: PriceTier;
   /** 同一模型的历史名 / 渠道名 / 免费档，归一到本价目表的键（统一名）；逐个显式列出 */
   aliases?: readonly string[];
+}
+
+/** 入口结算出的双币种费用；未提供对应币种官方价时字段缺省 */
+export interface Cost {
+  usd?: number;
+  cny?: number;
 }
 
 /** 价目表：厂商分组 → 统一模型名 → 价目。厂商只用于组织价目表，不参与查价 */
@@ -47,28 +62,56 @@ export function identifyModel(model: string): ModelIdentity {
   return { name: model };
 }
 
-/** 入口结算：人民币费用（元）。input 视为未命中缓存；reasoning 按 output 价；cache_write 按未命中价 */
-export function calcCost(p: ModelPricing, u: {
-  input: number;
-  output: number;
-  reasoning: number;
-  cache_read: number;
-  cache_write: number;
-}): number {
+/** 按单个币种单价表结算费用 */
+function calcTierCost(
+  tier: PriceTier,
+  u: {
+    input: number;
+    output: number;
+    reasoning: number;
+    cache_read: number;
+    cache_write: number;
+  },
+): number {
   return (
-    (u.input + u.cache_write) * p.input_cache_miss +
-    u.cache_read * p.input_cache_hit +
-    (u.output + u.reasoning) * p.output
+    (u.input + u.cache_write) * tier.input_cache_miss +
+    u.cache_read * tier.input_cache_hit +
+    (u.output + u.reasoning) * tier.output
   ) / 1_000_000;
+}
+
+/** 入口结算：分别计算官方美元与官方人民币费用；不换汇 */
+export function calcCost(
+  p: ModelPricing,
+  u: {
+    input: number;
+    output: number;
+    reasoning: number;
+    cache_read: number;
+    cache_write: number;
+  },
+): Cost {
+  const cost: Cost = {};
+  if (p.usd) cost.usd = calcTierCost(p.usd, u);
+  if (p.cny) cost.cny = calcTierCost(p.cny, u);
+  return cost;
 }
 
 export const PRICING: PricingTable = {
   deepseek: {
     // 统一名体现最新版本 deepseek-v4.1-flash；无版本名、v4 名与免费档都归一到此
+    // 官方高峰时段价：api-docs.deepseek.com（USD 与 CNY 均取高峰档）
     "deepseek-v4.1-flash": {
-      input_cache_miss: 2.0,
-      input_cache_hit: 0.04,
-      output: 8.0,
+      usd: {
+        input_cache_miss: 0.30,
+        input_cache_hit: 0.006,
+        output: 1.20,
+      },
+      cny: {
+        input_cache_miss: 2.0,
+        input_cache_hit: 0.04,
+        output: 8.0,
+      },
       aliases: [
         "deepseek-flash",
         "deepseek-v4-flash",
@@ -83,27 +126,64 @@ export const PRICING: PricingTable = {
   },
   xiaomi: {
     // 源数据 cache_write 全为 0，按 miss 价并入的口径未实测验证
+    // 官方实时 API 价：海外美元 vs 大陆人民币
     "mimo-v2.6-flash": {
-      input_cache_miss: 1.0,
-      input_cache_hit: 0.02,
-      output: 2.0,
+      usd: {
+        input_cache_miss: 0.14,
+        input_cache_hit: 0.0028,
+        output: 0.28,
+      },
+      cny: {
+        input_cache_miss: 1.0,
+        input_cache_hit: 0.02,
+        output: 2.0,
+      },
     },
   },
   zhipu: {
+    // 官方价：国际站 Z.ai（USD）vs 国内 BigModel.cn（CNY）
     "GLM-5.3": {
-      input_cache_miss: 8.0,
-      input_cache_hit: 2.0,
-      output: 28.0,
+      usd: {
+        input_cache_miss: 1.40,
+        input_cache_hit: 0.26,
+        output: 4.40,
+      },
+      cny: {
+        input_cache_miss: 8.0,
+        input_cache_hit: 2.0,
+        output: 28.0,
+      },
       aliases: ["glm-5.3"],
     },
     "GLM-5.3-Flash": {
-      input_cache_miss: 0.8,
-      input_cache_hit: 0.23,
-      output: 2.8,
+      usd: {
+        input_cache_miss: 0.15,
+        input_cache_hit: 0.03,
+        output: 0.50,
+      },
+      cny: {
+        input_cache_miss: 0.8,
+        input_cache_hit: 0.23,
+        output: 2.8,
+      },
       aliases: [
         "glm-5.3-flash",
         // 免费档是同一模型的不同计费渠道，显式列在这里，不做后缀推断
         "glm-5.3-flash-free",
+      ],
+    },
+  },
+  google: {
+    // Google AI 官方美元价；无官方人民币价，不换汇
+    "gemini-4-hydrogen": {
+      usd: {
+        input_cache_miss: 1.50,
+        input_cache_hit: 0.075,
+        output: 7.50,
+      },
+      aliases: [
+        "gemini-4-hydrogen-high",
+        "Gemini 4 Hydrogen (High)",
       ],
     },
   },

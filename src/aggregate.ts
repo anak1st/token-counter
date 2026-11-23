@@ -18,7 +18,10 @@ function emptyRow(date: string): DayRow {
     reasoning: 0,
     cache_read: 0,
     cache_write: 0,
-    cost: 0,
+    costUsd: 0,
+    costCny: 0,
+    usdComplete: true,
+    cnyComplete: true,
     ttftSumMs: 0,
     ttftCount: 0,
     genMs: 0,
@@ -32,7 +35,10 @@ function fold(target: DayRow, row: DayRow): void {
   target.reasoning += row.reasoning;
   target.cache_read += row.cache_read;
   target.cache_write += row.cache_write;
-  target.cost += row.cost;
+  target.costUsd += row.costUsd;
+  target.costCny += row.costCny;
+  if (!row.usdComplete) target.usdComplete = false;
+  if (!row.cnyComplete) target.cnyComplete = false;
   target.ttftSumMs += row.ttftSumMs;
   target.ttftCount += row.ttftCount;
   target.genMs += row.genMs;
@@ -69,7 +75,16 @@ export function aggregate(events: Iterable<UsageEvent>): ModelGroup[] {
     row.reasoning += e.usage.reasoning;
     row.cache_read += e.usage.cache_read;
     row.cache_write += e.usage.cache_write;
-    row.cost += e.cost;
+    if (e.cost.usd !== undefined) {
+      row.costUsd += e.cost.usd;
+    } else {
+      row.usdComplete = false;
+    }
+    if (e.cost.cny !== undefined) {
+      row.costCny += e.cost.cny;
+    } else {
+      row.cnyComplete = false;
+    }
     if (e.ttftMs !== undefined) {
       row.ttftSumMs += e.ttftMs;
       row.ttftCount += 1;
