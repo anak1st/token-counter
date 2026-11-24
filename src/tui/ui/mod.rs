@@ -10,6 +10,7 @@ mod models_panel;
 mod overview;
 mod period;
 mod session;
+mod unknown_modal;
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -19,7 +20,7 @@ use ratatui::widgets::{
 };
 use ratatui::Frame;
 
-use super::app::{App, FocusPane, Tab, UiLayout};
+use super::app::{ActiveModal, App, FocusPane, Tab, UiLayout};
 
 /// 加载动画帧序列。
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -62,14 +63,17 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Tab::Overview => {
                 if let Some(snap) = app.snapshot.as_ref() {
                     let view = snap.view(app.agent_filter);
-                    let lower_hit = overview::render(
+                    let hits = overview::render(
                         frame,
                         sections[1],
                         view,
                         snap.is_partial,
+                        app.chart_mode,
                         &mut app.overview_table,
                     );
-                    app.layout.lower = Some(lower_hit);
+                    app.layout.lower = Some(hits.lower);
+                    app.layout.chart_days_rect = hits.chart_days;
+                    app.layout.chart_hours_rect = hits.chart_hours;
                 }
             }
             Tab::Hour => {
@@ -174,9 +178,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     render_footer(frame, app, sections[2]);
 
     // 弹窗打开时覆盖渲染在最顶层
-    if app.agent_picker_open {
-        app.layout.modal = agent_picker::render(frame, app, area);
-    }
+    app.layout.modal = match app.active_modal {
+        Some(ActiveModal::AgentPicker) => agent_picker::render(frame, app, area),
+        Some(ActiveModal::UnknownModels) => unknown_modal::render(frame, app, area),
+        None => None,
+    };
 }
 
 /// 顶部 Tabs 导航栏：边框与其余面板完全一致，右侧框内放置紧凑的 Agent 选择按钮。
@@ -293,49 +299,58 @@ fn render_loading(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(paragraph, rows[1]);
 }
 
-/// 底部提示与 60s 刷新状态栏。
-fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let hints = if app.agent_picker_open {
-        Line::from(vec![
+/// 底部提示与 60s 刷新状态栏（同时记录 `N unknown [u]` 可点击热区）。
+fn render_footer(frame: &mut Frame, app: &mut App, area: Rect) {
+    let hints = match app.active_modal {
+        Some(ActiveModal::AgentPicker) => Line::from(vec![
             Span::styled(" ↑/↓/j/k", Style::default().fg(Color::Cyan)),
             Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Enter", Style::default().fg(Color::Cyan)),
             Span::styled(" confirm  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Esc/a", Style::default().fg(Color::Cyan)),
             Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-        ])
-    } else {
-        let mut hint_spans = vec![
-            Span::styled(" ←/→", Style::default().fg(Color::Cyan)),
-            Span::styled(" view  ", Style::default().fg(Color::DarkGray)),
-        ];
+        ]),
+        Some(ActiveModal::UnknownModels) => Line::from(vec![
+            Span::styled(" ↑/↓/j/k", Style::default().fg(Color::Cyan)),
+            Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc/u", Style::default().fg(Color::Cyan)),
+            Span::styled(" close", Style::default().fg(Color::DarkGray)),
+        ]),
+        None => {
+            let mut hint_spans = vec![
+                Span::styled(" ←/→", Style::default().fg(Color::Cyan)),
+                Span::styled(" view  ", Style::default().fg(Color::DarkGray)),
+            ];
 
-        if app.current_tab.has_dual_panes() {
-            hint_spans.push(Span::styled("Tab", Style::default().fg(Color::Cyan)));
-            if app.focus == FocusPane::Lower {
-                hint_spans.push(Span::styled(" upper  ", Style::default().fg(Color::DarkGray)));
-            } else {
-                hint_spans.push(Span::styled(" pane  ", Style::default().fg(Color::DarkGray)));
+            if app.current_tab.has_dual_panes() {
+                hint_spans.push(Span::styled("Tab", Style::default().fg(Color::Cyan)));
+                if app.focus == FocusPane::Lower {
+                    hint_spans.push(Span::styled(" upper  ", Style::default().fg(Color::DarkGray)));
+                } else {
+                    hint_spans.push(Span::styled(" pane  ", Style::default().fg(Color::DarkGray)));
+                }
             }
-        }
 
-        hint_spans.push(Span::styled("a", Style::default().fg(Color::Cyan)));
-        hint_spans.push(Span::styled(" agent  ", Style::default().fg(Color::DarkGray)));
-        hint_spans.push(Span::styled("↑/↓", Style::default().fg(Color::Cyan)));
-        hint_spans.push(Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)));
-        hint_spans.push(Span::styled("r", Style::default().fg(Color::Cyan)));
-        hint_spans.push(Span::styled(" refresh  ", Style::default().fg(Color::DarkGray)));
-        hint_spans.push(Span::styled("q", Style::default().fg(Color::Cyan)));
-        hint_spans.push(Span::styled(" quit", Style::default().fg(Color::DarkGray)));
-        Line::from(hint_spans)
+            hint_spans.push(Span::styled("a", Style::default().fg(Color::Cyan)));
+            hint_spans.push(Span::styled(" agent  ", Style::default().fg(Color::DarkGray)));
+            hint_spans.push(Span::styled("↑/↓", Style::default().fg(Color::Cyan)));
+            hint_spans.push(Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)));
+            hint_spans.push(Span::styled("r", Style::default().fg(Color::Cyan)));
+            hint_spans.push(Span::styled(" refresh  ", Style::default().fg(Color::DarkGray)));
+            hint_spans.push(Span::styled("q", Style::default().fg(Color::Cyan)));
+            hint_spans.push(Span::styled(" quit", Style::default().fg(Color::DarkGray)));
+            Line::from(hint_spans)
+        }
     };
+
+    let mut unknown_badge_len: u16 = 0;
 
     let status = if app.refreshing {
         let is_backfilling = app.snapshot.as_ref().is_some_and(|s| s.is_partial);
         let msg = if is_backfilling {
             " 30d ready · loading history... "
         } else {
-            " Refreshing 30d... "
+            " Refreshing today... "
         };
         Line::from(vec![
             Span::styled(
@@ -354,10 +369,10 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
 
         let mut spans = Vec::new();
         if unknown_count > 0 {
-            spans.push(Span::styled(
-                format!("{} unknown · ", unknown_count),
-                Style::default().fg(Color::Yellow),
-            ));
+            let badge = format!("{} unknown [u]", unknown_count);
+            unknown_badge_len = badge.len() as u16;
+            spans.push(Span::styled(badge, Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled(" · ", Style::default().fg(Color::DarkGray)));
         }
         spans.push(Span::styled(
             format!(
@@ -373,11 +388,20 @@ fn render_footer(frame: &mut Frame, app: &App, area: Rect) {
         Line::default()
     };
 
-    let status_width = (status.width() as u16).min(area.width / 2);
+    let status_total_w = status.width() as u16;
+    let status_width = status_total_w.min(area.width / 2);
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(status_width)])
         .split(area);
+
+    if unknown_badge_len > 0 && chunks[1].width > 0 {
+        let start_x = chunks[1].right().saturating_sub(status_total_w.min(chunks[1].width));
+        let badge_w = unknown_badge_len.min(chunks[1].right().saturating_sub(start_x));
+        if badge_w > 0 {
+            app.layout.unknown_badge_rect = Some(Rect::new(start_x, chunks[1].y, badge_w, 1));
+        }
+    }
 
     frame.render_widget(Paragraph::new(hints), chunks[0]);
     frame.render_widget(Paragraph::new(status).alignment(Alignment::Right), chunks[1]);
@@ -446,6 +470,13 @@ pub fn upper_highlight_style(focused: bool) -> Style {
             .fg(Color::DarkGray)
             .add_modifier(Modifier::REVERSED)
     }
+}
+
+/// 在给定区域内计算居中矩形（供各弹窗共用）。
+pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let x = area.x + area.width.saturating_sub(width) / 2;
+    let y = area.y + area.height.saturating_sub(height) / 2;
+    Rect::new(x, y, width, height)
 }
 
 /// 当表格数据行数超过可视区域时，在右边框绘制垂直滚动条。
@@ -528,12 +559,27 @@ pub fn format_tokens_m(n: u64) -> String {
     format!("{:.3}M", n as f64 / 1_000_000.0)
 }
 
-/// 紧凑 token 格式化（仅用于柱状图 Y 轴刻度，如 `195M`、`42k`）。
+/// 将柱状图最大值向上取整为 1 位有效数字的整数（如 `195M → 200M`、`42M → 50M`、`320k → 400k`）。
+pub fn nice_axis_ceil(raw: u64) -> u64 {
+    if raw == 0 {
+        return 0;
+    }
+    let mut pow10 = 1u64;
+    while pow10 <= raw / 10 {
+        pow10 *= 10;
+    }
+    let lead = raw.div_ceil(pow10);
+    lead.saturating_mul(pow10)
+}
+
+/// 紧凑整数格式化（用于柱状图 Y 轴 1 位有效数字整刻度，如 `200M`、`50M`、`400k`、`1B`）。
 pub fn format_axis_tokens(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.0}M", n as f64 / 1_000_000.0)
+    if n >= 1_000_000_000 {
+        format!("{}B", n / 1_000_000_000)
+    } else if n >= 1_000_000 {
+        format!("{}M", n / 1_000_000)
     } else if n >= 1_000 {
-        format!("{:.0}k", n as f64 / 1_000.0)
+        format!("{}k", n / 1_000)
     } else {
         n.to_string()
     }
@@ -576,10 +622,8 @@ mod tests {
     use token_counter::report::session::{SessionDetail, SessionSummary, TurnSummary};
 
     use super::*;
-    use crate::tui::app::KeyAction;
-    use crate::tui::data::{
-        ChartDay, ChartSegment, ModelRow, PeriodData, SessionItem, TuiSnapshot, ViewSnapshot,
-    };
+    use crate::tui::app::{ChartMode, KeyAction};
+    use crate::tui::data::{ModelRow, PeriodData, SessionItem, TuiSnapshot, ViewSnapshot};
 
     fn empty_view() -> ViewSnapshot {
         ViewSnapshot {
@@ -601,7 +645,6 @@ mod tests {
                 breakdowns: HashMap::new(),
             },
             model_rows: Vec::new(),
-            chart_days: Vec::new(),
             sessions: Vec::new(),
             unknown_models: Vec::new(),
         }
@@ -699,16 +742,8 @@ mod tests {
             weekly: make_period(week_row),
             monthly: make_period(month_row),
             model_rows: vec![model_row],
-            chart_days: vec![ChartDay {
-                short_label: "11-24".to_string(),
-                total_tokens: 4_600_000,
-                segments: vec![ChartSegment {
-                    model: "deepseek-v4.1-flash".to_string(),
-                    tokens: 4_600_000,
-                }],
-            }],
             sessions: vec![dsh_session],
-            unknown_models: Vec::new(),
+            unknown_models: vec!["opencode · openrouter · test-new-model".to_string()],
         };
 
         let mut by_agent: HashMap<Agent, ViewSnapshot> = HashMap::new();
@@ -740,6 +775,46 @@ mod tests {
             app.current_tab = tab;
             terminal.draw(|f| render(f, &mut app)).unwrap();
         }
+
+        // 在 `Overview` 点击柱状图 `Hours` / `Days` 切换，以及点击底栏 `1 unknown [u]` 打开弹窗
+        app.switch_tab(Tab::Overview);
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+        let hours_rect = app.layout.chart_hours_rect.unwrap();
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: hours_rect.x + 1,
+            row: hours_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.chart_mode, ChartMode::Hours);
+
+        let badge_rect = app.layout.unknown_badge_rect.unwrap();
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: badge_rect.x + 1,
+            row: badge_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.active_modal, Some(ActiveModal::UnknownModels));
+        terminal.draw(|f| render(f, &mut app)).unwrap();
+        let unknown_buf: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(unknown_buf.contains("Unknown Models (1)"));
+        assert!(unknown_buf.contains("opencode · openrouter · test-new-model"));
+
+        // 点击弹窗外侧关闭
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.active_modal, None);
 
         // 在 `Day` Tab 下通过 `Tab` 切到下方 Models 子框，再通过 Esc 退回上表
         app.switch_tab(Tab::Day);
@@ -791,7 +866,7 @@ mod tests {
             row: btn_rect.y,
             modifiers: KeyModifiers::NONE,
         });
-        assert!(app.agent_picker_open);
+        assert_eq!(app.active_modal, Some(ActiveModal::AgentPicker));
         terminal.draw(|f| render(f, &mut app)).unwrap();
         let modal_buf: String = terminal
             .backend()
@@ -812,7 +887,7 @@ mod tests {
             row: modal_rows.y + 2,
             modifiers: KeyModifiers::NONE,
         });
-        assert!(!app.agent_picker_open);
+        assert_eq!(app.active_modal, None);
         assert_eq!(app.agent_filter, Some(Agent::Dsh));
 
         // 鼠标点击下方 Turns 面板：焦点自动切到 Lower
@@ -846,5 +921,17 @@ mod tests {
             KeyAction::None
         );
         assert_eq!(app.focus, FocusPane::Upper);
+    }
+
+    #[test]
+    fn rounds_axis_ceiling_to_single_significant_digit() {
+        assert_eq!(format_axis_tokens(nice_axis_ceil(0)), "0");
+        assert_eq!(format_axis_tokens(nice_axis_ceil(750)), "800");
+        assert_eq!(format_axis_tokens(nice_axis_ceil(12_500)), "20k");
+        assert_eq!(format_axis_tokens(nice_axis_ceil(320_000)), "400k");
+        assert_eq!(format_axis_tokens(nice_axis_ceil(950_000)), "1M");
+        assert_eq!(format_axis_tokens(nice_axis_ceil(42_300_000)), "50M");
+        assert_eq!(format_axis_tokens(nice_axis_ceil(195_000_000)), "200M");
+        assert_eq!(format_axis_tokens(nice_axis_ceil(1_200_000_000)), "2B");
     }
 }

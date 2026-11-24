@@ -52,12 +52,13 @@ src/
     ├── app.rs                # 6 个 Tab 状态、各表独立滚动与快捷键分发
     ├── data.rs               # TuiSnapshot 快照构建（PeriodData / ChartDay / Sessions）
     └── ui/
-        ├── mod.rs            # 三段式布局、顶部 Agent 筛选徽章、60%/40% 统一高度
+        ├── mod.rs            # 三段式布局、顶部框内 Agent 按钮、底栏未知模型入口与公共辅助
         ├── agent_picker.rs   # 可滚动居中 Agent 筛选弹窗（含 All 与各 Agent 汇总）
-        ├── overview.rs       # KPI 条 + 30 天堆叠柱状图 + 全量 Models 面板
+        ├── unknown_modal.rs  # 精简未知模型弹窗（列出未命中价目表的 agent · provider · model）
+        ├── overview.rs       # 全量 KPI + 自适应宽度 Days/Hours 堆叠柱状图 + 全量 Models 面板
         ├── period.rs         # Hour / Day / Week / Month 通用上下联动双表
         ├── models_panel.rs   # 统一 Models 面板与跨表共享的右侧数值列宽
-        └── session.rs        # 当前 Agent 会话列表 + 逐个 Turns 明细
+        └── session.rs        # 会话列表（支持 All 与单 Agent）+ 逐个 Turns 明细
 ```
 
 ## 2. 归一化事件与指标口径
@@ -97,14 +98,14 @@ src/
 - `Weekly`：ISO 周 `YYYY-Www`（周一为一周起点）
 - `Monthly`：`YYYY-MM`
 
-## 3. TUI 两段式梯度加载与刷新
+## 3. TUI 梯度加载与当日增量刷新
 
-TUI 坚持**零磁盘缓存**，同时通过内存两段式加载兼顾首屏速度与完整历史：
+TUI 坚持**零磁盘缓存**，同时通过内存梯度加载兼顾首屏速度、完整历史与极速增量刷新：
 
-1. 启动时固定切分点 `cutoff_ms`（本地 30 天前 `00:00`）；
-2. **阶段 1（热窗）**：先扫 `[cutoff_ms, ∞)`（通常百毫秒级），立即推送 `is_partial = true` 快照点亮首屏；
-3. **阶段 2（冷窗）**：后台静默补扫 `[0, cutoff_ms)` 一次并常驻 worker 线程内存，与热窗无缝拼合推送全量快照；
-4. **阶段 3（60s 自动刷新 / 手动 `r`）**：仅重扫 30 天热窗再与内存冷窗合并，既快又不重计、不漏计。
+1. 启动时固定两个本地 `00:00` 切分点：`initial_cutoff_ms`（30 天前 `00:00`）与 `refresh_cutoff_ms`（今日 `00:00`）；
+2. **阶段 1（首屏 30 天）**：先扫 `[initial_cutoff_ms, ∞)`（通常百毫秒级），立即推送 `is_partial = true` 快照点亮首屏与 30 天柱状图；
+3. **阶段 2（历史补全）**：后台静默补扫 `[0, initial_cutoff_ms)` 一次并合并推送全量快照，随后将 `ts_ms < refresh_cutoff_ms` 的所有历史事件冻结驻留 worker 线程内存；
+4. **阶段 3（60s 自动刷新 / 手动 `r`）**：仅重扫今日 `[refresh_cutoff_ms, ∞)`（1 天窗口）再与内存冻结历史合并，既极快又不重计、不漏计。
 
 ## 4. 新增数据源步骤
 

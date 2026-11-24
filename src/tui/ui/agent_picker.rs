@@ -12,8 +12,8 @@ use ratatui::Frame;
 
 use super::models_panel::TABLE_COL_SPACING;
 use super::{
-    format_cost, format_int, format_tokens_m, highlight_style, panel_block, render_scrollbar,
-    table_header_style, table_rows_rect,
+    centered_rect, format_cost, format_int, format_tokens_m, highlight_style, panel_block,
+    render_scrollbar, table_header_style, table_rows_rect,
 };
 use crate::tui::app::{App, TableHit};
 
@@ -105,24 +105,17 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> 
         .column_spacing(TABLE_COL_SPACING)
         .row_highlight_style(highlight_style());
 
-    frame.render_stateful_widget(table, modal_area, &mut app.agent_picker_table);
+    frame.render_stateful_widget(table, modal_area, &mut app.modal_table);
     render_scrollbar(
         frame,
         modal_area,
         inner,
         options.len(),
-        app.agent_picker_table.selected(),
+        app.modal_table.selected(),
     );
 
     Some(TableHit {
         panel: modal_area,
         rows: Some(table_rows_rect(inner)),
     })
-}
-
-/// 在给定区域内计算居中矩形。
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect::new(x, y, width, height)
 }

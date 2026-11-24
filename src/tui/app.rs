@@ -88,6 +88,30 @@ pub enum FocusPane {
     Lower,
 }
 
+/// 首页堆叠柱状图的时间粒度（仅影响柱状图，KPI 与 Models 保持全量）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartMode {
+    Days,
+    Hours,
+}
+
+impl ChartMode {
+    /// 切换 `Days` / `Hours`。
+    pub fn toggle(self) -> Self {
+        match self {
+            ChartMode::Days => ChartMode::Hours,
+            ChartMode::Hours => ChartMode::Days,
+        }
+    }
+}
+
+/// 当前打开的居中弹窗类型（同一时刻最多打开一个弹窗）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActiveModal {
+    AgentPicker,
+    UnknownModels,
+}
+
 /// 单个可交互表格的外框区域与数据行区域（不含表头）。
 #[derive(Debug, Clone, Copy)]
 pub struct TableHit {
@@ -102,11 +126,16 @@ pub struct UiLayout {
     pub tab_rects: Vec<(Tab, Rect)>,
     /// 顶部框内 `Agent: ... [a]` 按钮区域。
     pub agent_button_rect: Option<Rect>,
+    /// 首页柱状图内 `Days` 与 `Hours` 切换按钮区域。
+    pub chart_days_rect: Option<Rect>,
+    pub chart_hours_rect: Option<Rect>,
+    /// 底部状态栏 `N unknown [u]` 可点击徽章区域。
+    pub unknown_badge_rect: Option<Rect>,
     /// 上半主表热区（`Hour` / `Day` / `Week` / `Month` / `Session`）。
     pub upper: Option<TableHit>,
     /// 下半明细表热区（`Overview` 及各双表视图的底部面板）。
     pub lower: Option<TableHit>,
-    /// Agent 筛选弹窗热区（仅弹窗打开时有效）。
+    /// 当前弹窗热区（仅弹窗打开时有效）。
     pub modal: Option<TableHit>,
 }
 
@@ -128,10 +157,12 @@ pub struct App {
     pub spinner_tick: usize,
     /// 全部 6 个视图共用的 Agent 筛选（`None` 表示 `All`）。
     pub agent_filter: Option<Agent>,
-    /// Agent 选择弹窗是否打开。
-    pub agent_picker_open: bool,
-    /// Agent 选择弹窗内的滚动选中状态。
-    pub agent_picker_table: TableState,
+    /// 首页柱状图时间粒度（默认按天，可切按小时）。
+    pub chart_mode: ChartMode,
+    /// 当前打开的居中弹窗（`None` 表示无弹窗）。
+    pub active_modal: Option<ActiveModal>,
+    /// 当前弹窗内的滚动选中状态。
+    pub modal_table: TableState,
     /// 双表视图当前聚焦的面板（上表或下表）。
     pub focus: FocusPane,
     pub overview_table: TableState,
@@ -157,8 +188,9 @@ impl App {
             last_refresh_at: None,
             spinner_tick: 0,
             agent_filter: None,
-            agent_picker_open: false,
-            agent_picker_table: initial_table_state(),
+            chart_mode: ChartMode::Days,
+            active_modal: None,
+            modal_table: initial_table_state(),
             focus: FocusPane::Upper,
             overview_table: initial_table_state(),
             hour_table: initial_table_state(),
@@ -271,16 +303,30 @@ impl App {
             .iter()
             .position(|&opt| opt == self.agent_filter)
             .unwrap_or(0);
-        self.agent_picker_table = TableState::default();
-        self.agent_picker_table.select(Some(selected_idx));
-        self.agent_picker_open = true;
+        self.modal_table = TableState::default();
+        self.modal_table.select(Some(selected_idx));
+        self.active_modal = Some(ActiveModal::AgentPicker);
+    }
+
+    /// 打开未知模型弹窗（当前视角存在未知模型时）。
+    pub fn open_unknown_models(&mut self) {
+        let count = self
+            .active_view()
+            .map(|v| v.unknown_models.len())
+            .unwrap_or(0);
+        if count == 0 {
+            return;
+        }
+        self.modal_table = TableState::default();
+        self.modal_table.select(Some(0));
+        self.active_modal = Some(ActiveModal::UnknownModels);
     }
 
     /// 确认 Agent 弹窗当前选中项并应用到全部 6 个视图。
     pub fn confirm_agent_picker(&mut self) {
         let options = self.picker_options();
-        let idx = self.agent_picker_table.selected().unwrap_or(0);
-        self.agent_picker_open = false;
+        let idx = self.modal_table.selected().unwrap_or(0);
+        self.active_modal = None;
 
         let choice = match options.get(idx) {
             Some(&c) => c,
@@ -294,21 +340,41 @@ impl App {
         }
     }
 
+    /// 返回当前打开弹窗的行数。
+    fn modal_list_len(&self) -> usize {
+        match self.active_modal {
+            Some(ActiveModal::AgentPicker) => self.picker_options().len(),
+            Some(ActiveModal::UnknownModels) => self
+                .active_view()
+                .map(|v| v.unknown_models.len())
+                .unwrap_or(0),
+            None => 0,
+        }
+    }
+
     /// 处理单次键盘事件。
     pub fn handle_key(&mut self, key: KeyEvent) -> KeyAction {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return KeyAction::Quit;
         }
 
-        // Agent 选择弹窗打开时独占键盘输入
-        if self.agent_picker_open {
-            self.handle_picker_key(key);
+        // 任意弹窗打开时独占键盘输入
+        if let Some(modal) = self.active_modal {
+            self.handle_modal_key(modal, key);
             return KeyAction::None;
         }
 
         match key.code {
             KeyCode::Char('a') => {
                 self.open_agent_picker();
+                KeyAction::None
+            }
+            KeyCode::Char('u') => {
+                self.open_unknown_models();
+                KeyAction::None
+            }
+            KeyCode::Char('t') if self.current_tab == Tab::Overview => {
+                self.chart_mode = self.chart_mode.toggle();
                 KeyAction::None
             }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter => {
@@ -376,8 +442,8 @@ impl App {
         let row = mouse.row;
 
         // 弹窗打开时由弹窗独占鼠标交互
-        if self.agent_picker_open {
-            self.handle_picker_mouse(mouse);
+        if let Some(modal) = self.active_modal {
+            self.handle_modal_mouse(modal, mouse);
             return;
         }
 
@@ -386,6 +452,27 @@ impl App {
                 if let Some(btn_rect) = self.layout.agent_button_rect {
                     if rect_contains(btn_rect, col, row) {
                         self.open_agent_picker();
+                        return;
+                    }
+                }
+
+                if let Some(badge_rect) = self.layout.unknown_badge_rect {
+                    if rect_contains(badge_rect, col, row) {
+                        self.open_unknown_models();
+                        return;
+                    }
+                }
+
+                if let Some(days_rect) = self.layout.chart_days_rect {
+                    if rect_contains(days_rect, col, row) {
+                        self.chart_mode = ChartMode::Days;
+                        return;
+                    }
+                }
+
+                if let Some(hours_rect) = self.layout.chart_hours_rect {
+                    if rect_contains(hours_rect, col, row) {
+                        self.chart_mode = ChartMode::Hours;
                         return;
                     }
                 }
@@ -429,31 +516,33 @@ impl App {
     }
 
     /// 处理弹窗打开时的鼠标点击与滚轮事件。
-    fn handle_picker_mouse(&mut self, mouse: MouseEvent) {
+    fn handle_modal_mouse(&mut self, modal: ActiveModal, mouse: MouseEvent) {
         let col = mouse.column;
         let row = mouse.row;
-        let len = self.picker_options().len();
+        let len = self.modal_list_len();
 
         match mouse.kind {
-            MouseEventKind::ScrollUp => scroll_table(&mut self.agent_picker_table, len, -1),
-            MouseEventKind::ScrollDown => scroll_table(&mut self.agent_picker_table, len, 1),
+            MouseEventKind::ScrollUp => scroll_table(&mut self.modal_table, len, -1),
+            MouseEventKind::ScrollDown => scroll_table(&mut self.modal_table, len, 1),
             MouseEventKind::Down(MouseButton::Left) => {
-                let modal = match self.layout.modal {
+                let hit = match self.layout.modal {
                     Some(m) => m,
                     None => return,
                 };
-                if let Some(rows_rect) = modal.rows {
+                if let Some(rows_rect) = hit.rows {
                     if rect_contains(rows_rect, col, row) {
-                        let idx = self.agent_picker_table.offset() + (row - rows_rect.y) as usize;
+                        let idx = self.modal_table.offset() + (row - rows_rect.y) as usize;
                         if idx < len {
-                            self.agent_picker_table.select(Some(idx));
-                            self.confirm_agent_picker();
+                            self.modal_table.select(Some(idx));
+                            if modal == ActiveModal::AgentPicker {
+                                self.confirm_agent_picker();
+                            }
                         }
                         return;
                     }
                 }
-                if !rect_contains(modal.panel, col, row) {
-                    self.agent_picker_open = false;
+                if !rect_contains(hit.panel, col, row) {
+                    self.active_modal = None;
                 }
             }
             _ => {}
@@ -477,36 +566,43 @@ impl App {
         self.scroll_focused(delta);
     }
 
-    /// 处理 Agent 选择弹窗内的键盘操作。
-    fn handle_picker_key(&mut self, key: KeyEvent) {
-        let len = self.picker_options().len();
+    /// 处理当前打开弹窗内的键盘操作。
+    fn handle_modal_key(&mut self, modal: ActiveModal, key: KeyEvent) {
+        let len = self.modal_list_len();
         match key.code {
-            KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('q') => {
-                self.agent_picker_open = false;
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.active_modal = None;
             }
-            KeyCode::Enter | KeyCode::Char(' ') => {
-                self.confirm_agent_picker();
+            KeyCode::Char('a') if modal == ActiveModal::AgentPicker => {
+                self.active_modal = None;
             }
+            KeyCode::Char('u') if modal == ActiveModal::UnknownModels => {
+                self.active_modal = None;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => match modal {
+                ActiveModal::AgentPicker => self.confirm_agent_picker(),
+                ActiveModal::UnknownModels => self.active_modal = None,
+            },
             KeyCode::Up | KeyCode::Char('k') => {
-                scroll_table(&mut self.agent_picker_table, len, -1);
+                scroll_table(&mut self.modal_table, len, -1);
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                scroll_table(&mut self.agent_picker_table, len, 1);
+                scroll_table(&mut self.modal_table, len, 1);
             }
             KeyCode::PageUp => {
-                scroll_table(&mut self.agent_picker_table, len, -10);
+                scroll_table(&mut self.modal_table, len, -10);
             }
             KeyCode::PageDown => {
-                scroll_table(&mut self.agent_picker_table, len, 10);
+                scroll_table(&mut self.modal_table, len, 10);
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 if len > 0 {
-                    self.agent_picker_table.select(Some(0));
+                    self.modal_table.select(Some(0));
                 }
             }
             KeyCode::End | KeyCode::Char('G') => {
                 if len > 0 {
-                    self.agent_picker_table.select(Some(len - 1));
+                    self.modal_table.select(Some(len - 1));
                 }
             }
             _ => {}
