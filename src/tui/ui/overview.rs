@@ -28,10 +28,15 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
     render_kpi_bar(frame, &snap, upper_chunks[0]);
     render_stacked_bar_chart(frame, &snap.chart_days, upper_chunks[1]);
+    let models_title = if snap.is_partial {
+        "Models · Last 30 Days (by tokens)"
+    } else {
+        "Models · All Time (by tokens)"
+    };
     models_panel::render(
         frame,
         models_area,
-        "Models · All Time (by tokens)",
+        models_title,
         &snap.model_rows,
         Some(&mut app.overview_table),
     );
@@ -39,13 +44,18 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// 顶部一行 KPI 摘要条：活跃天数、请求数、总 Tokens、总美元、缓存占比、平均 TTFT、平均纯解码速度。
 fn render_kpi_bar(frame: &mut Frame, snap: &TuiSnapshot, area: Rect) {
-    let block = styled_block("All Time Summary");
+    let title = if snap.is_partial {
+        "Last 30 Days Summary (loading history...)"
+    } else {
+        "All Time Summary"
+    };
+    let block = styled_block(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let total = &snap.overall_total;
     let mut items = vec![
-        ("Days ", snap.daily_rows.len().to_string(), Color::White),
+        ("Days ", snap.daily.rows.len().to_string(), Color::White),
         ("Reqs ", format_int(total.requests), Color::White),
         ("Tokens ", format_tokens_m(total.total_tokens()), Color::Cyan),
         ("Cost ", format_cost(total.cost_usd), Color::Green),

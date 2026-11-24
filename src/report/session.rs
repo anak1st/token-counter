@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::{bail, Result};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::core::model::UsageEvent;
+use crate::core::model::{Agent, UsageEvent};
 use crate::core::time::format_datetime;
 
 /// 单个会话的聚合摘要。
@@ -318,6 +318,113 @@ pub fn summarize_sessions(events: &[UsageEvent]) -> Vec<SessionSummary> {
     });
 
     summaries
+}
+
+/// 一次性将事件流中指定 Agent 的事件聚合为完整会话及 Turn 明细。
+///
+/// 返回的会话按最后活跃时间倒序排列，每个会话内的 Turn 按首次出现时间升序排列。
+pub fn summarize_sessions_with_turns(events: &[UsageEvent], agent: Agent) -> Vec<SessionDetail> {
+    struct SessionTurnsState {
+        label: Option<String>,
+        session_acc: MetricsAcc,
+        by_turn: HashMap<String, MetricsAcc>,
+    }
+
+    let mut by_session: HashMap<String, SessionTurnsState> = HashMap::new();
+
+    for event in events {
+        if event.agent != agent {
+            continue;
+        }
+
+        let state = by_session
+            .entry(event.session.clone())
+            .or_insert_with(|| SessionTurnsState {
+                label: event.session_label.clone(),
+                session_acc: MetricsAcc::new(event.ts_ms),
+                by_turn: HashMap::new(),
+            });
+
+        if state.label.is_none() && event.session_label.is_some() {
+            state.label = event.session_label.clone();
+        }
+        state.session_acc.add(event);
+
+        let turn_key = event.turn.as_deref().unwrap_or("default").to_string();
+        let turn_acc = state
+            .by_turn
+            .entry(turn_key)
+            .or_insert_with(|| MetricsAcc::new(event.ts_ms));
+        turn_acc.add(event);
+    }
+
+    let mut details = Vec::with_capacity(by_session.len());
+    for (session_id, state) in by_session {
+        let mut turn_entries: Vec<(String, MetricsAcc)> = state.by_turn.into_iter().collect();
+        turn_entries.sort_by(|a, b| {
+            a.1.first_ts_ms
+                .cmp(&b.1.first_ts_ms)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+
+        let mut turns = Vec::with_capacity(turn_entries.len());
+        for (idx, (turn_id, acc)) in turn_entries.into_iter().enumerate() {
+            let models = acc.sorted_models();
+            turns.push(TurnSummary {
+                index: idx + 1,
+                turn_id,
+                first_ts_ms: acc.first_ts_ms,
+                last_ts_ms: acc.last_ts_ms,
+                models,
+                steps: acc.steps,
+                aborted_steps: acc.aborted_steps,
+                peak_ctx: acc.peak_ctx,
+                input: acc.input,
+                output: acc.output,
+                reasoning: acc.reasoning,
+                cache_read: acc.cache_read,
+                cache_write: acc.cache_write,
+                cost_usd: acc.cost_usd,
+                ttft_sum_ms: acc.ttft_sum_ms,
+                ttft_count: acc.ttft_count,
+                gen_ms: acc.gen_ms,
+                speed_tokens: acc.speed_tokens,
+            });
+        }
+
+        let summary = SessionSummary {
+            session_id,
+            label: state.label,
+            first_ts_ms: state.session_acc.first_ts_ms,
+            last_ts_ms: state.session_acc.last_ts_ms,
+            models: state.session_acc.sorted_models(),
+            turns: turns.len(),
+            steps: state.session_acc.steps,
+            aborted_steps: state.session_acc.aborted_steps,
+            peak_ctx: state.session_acc.peak_ctx,
+            input: state.session_acc.input,
+            output: state.session_acc.output,
+            reasoning: state.session_acc.reasoning,
+            cache_read: state.session_acc.cache_read,
+            cache_write: state.session_acc.cache_write,
+            cost_usd: state.session_acc.cost_usd,
+            ttft_sum_ms: state.session_acc.ttft_sum_ms,
+            ttft_count: state.session_acc.ttft_count,
+            gen_ms: state.session_acc.gen_ms,
+            speed_tokens: state.session_acc.speed_tokens,
+        };
+
+        details.push(SessionDetail { summary, turns });
+    }
+
+    details.sort_by(|a, b| {
+        b.summary
+            .last_ts_ms
+            .cmp(&a.summary.last_ts_ms)
+            .then_with(|| a.summary.session_id.cmp(&b.summary.session_id))
+    });
+
+    details
 }
 
 /// 按精确 ID 或唯一前缀查找单个会话，并按 Turn 粒度聚合返回详情。
@@ -776,5 +883,17 @@ mod tests {
         // 歧义前缀与不存在前缀均报错
         assert!(find_session_detail(&events, "abc").is_err());
         assert!(find_session_detail(&events, "zzz").is_err());
+
+        // 按 Agent 一次性聚合全部会话与 Turn 明细
+        let dsh_details = summarize_sessions_with_turns(&events, Agent::Dsh);
+        assert_eq!(dsh_details.len(), 2);
+        assert_eq!(dsh_details[0].summary.session_id, "abc22222-yyyy");
+        assert_eq!(dsh_details[1].summary.session_id, "abc11111-xxxx");
+        assert_eq!(dsh_details[1].turns.len(), 2);
+        assert_eq!(dsh_details[1].turns[0].index, 1);
+        assert_eq!(dsh_details[1].turns[1].index, 2);
+
+        let agy_details = summarize_sessions_with_turns(&events, Agent::Agy);
+        assert!(agy_details.is_empty());
     }
 }

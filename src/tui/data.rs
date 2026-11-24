@@ -1,23 +1,25 @@
-//! TUI 数据快照构建。
+//! TUI 数据快照构建与梯度扫描支持。
 //!
-//! 在后台线程扫描全部内置 Agent（`opencode`、`dsh`、`agy`），复用核心聚合结果，
-//! 生成供 `Overview` 与 `Day` 两个视图直接渲染的不可变快照。
+//! 后台线程采用「30 天热窗 + 历史冷窗」两段式加载：
+//! - 热窗 `[cutoff_ms, ∞)`：启动先扫以毫秒级出首屏，之后每 60s 只重扫热窗；
+//! - 冷窗 `[0, cutoff_ms)`：后台静默补扫一次并驻留内存，与热窗无缝拼合为完整全量。
 
 use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
 
 use anyhow::Result;
 use jiff::{ToSpan, ZonedDateTime};
 use token_counter::adapters;
-use token_counter::core::model::Agent;
+use token_counter::core::model::{Agent, UsageEvent};
 use token_counter::core::pricing::PricingCatalog;
 use token_counter::core::time::{Granularity, TimeRange};
-use token_counter::report::aggregate::{self, BucketRow};
+use token_counter::report::aggregate::{self, BucketRow, Report};
+use token_counter::report::session::{self, SessionDetail};
 
-/// `Overview` 堆叠柱状图展示的最近日历天数。
+/// `Overview` 堆叠柱状图展示的最近日历天数，同时作为热窗默认天数。
+pub const HOT_WINDOW_DAYS: u32 = 30;
 pub const CHART_DAYS: usize = 30;
 
-/// 单条 `agent · provider · model` 汇总行（供 `Overview` 与 `Day` 共用）。
+/// 单条 `agent · provider · model` 汇总行（供 `Overview` 与时间维度 Tab 共用）。
 #[derive(Debug, Clone)]
 pub struct ModelRow {
     pub agent: Agent,
@@ -31,6 +33,15 @@ impl ModelRow {
     pub fn display_name(&self) -> String {
         format!("{} · {} · {}", self.agent.id(), self.provider, self.model)
     }
+}
+
+/// 单个时间粒度（`Hour` / `Day` / `Week` / `Month`）的倒序汇总与各分桶模型明细。
+#[derive(Debug, Clone)]
+pub struct PeriodData {
+    /// 按时间倒序排列的分桶汇总行（最新在最上面）。
+    pub rows: Vec<BucketRow>,
+    /// 分桶标签 -> 该分桶内各 `agent · provider · model` 明细（按总 token 降序）。
+    pub breakdowns: HashMap<String, Vec<ModelRow>>,
 }
 
 /// 堆叠柱状图中单根柱子的单个模型分段。
@@ -49,73 +60,88 @@ pub struct ChartDay {
     pub segments: Vec<ChartSegment>,
 }
 
-/// 后台线程一次性构建完毕的 TUI 全量快照。
+/// 后台线程一次性构建完毕的 TUI 快照。
 #[derive(Debug, Clone)]
 pub struct TuiSnapshot {
     /// 全量合并总计（供 `Overview` 顶部 KPI 条使用）。
     pub overall_total: BucketRow,
-    /// 按时间倒序排列的每日汇总行（最新日期在最上面）。
-    pub daily_rows: Vec<BucketRow>,
-    /// 每日明细映射：`YYYY-MM-DD` -> 当天各 `agent · provider · model`（按 token 降序）。
-    pub daily_breakdowns: HashMap<String, Vec<ModelRow>>,
-    /// 全量各 `agent · provider · model` 汇总（按 token 降序）。
+    /// 按小时倒序数据（`Hour` Tab）。
+    pub hourly: PeriodData,
+    /// 按天倒序数据（`Day` Tab）。
+    pub daily: PeriodData,
+    /// 按周倒序数据（`Week` Tab）。
+    pub weekly: PeriodData,
+    /// 按月倒序数据（`Month` Tab）。
+    pub monthly: PeriodData,
+    /// 按 Agent 分组的会话与 Turn 明细列表（会话按最后活跃时间倒序，Turn 按时间升序）。
+    pub sessions_by_agent: HashMap<Agent, Vec<SessionDetail>>,
+    /// 全量各 `agent · provider · model` 汇总（按总 token 降序）。
     pub model_rows: Vec<ModelRow>,
     /// 最近 30 个日历日的堆叠柱数据（左旧右新）。
     pub chart_days: Vec<ChartDay>,
     /// 未知模型列表（`agent/provider/model`）。
     pub unknown_models: Vec<String>,
+    /// 为 true 表示当前为首阶段 30 天快速快照，后台仍在补全更早历史。
+    pub is_partial: bool,
     /// 本次快照生成时刻（本地 `HH:MM:SS`）。
     pub updated_at: String,
     /// 本次后台加载耗时（毫秒）。
     pub load_ms: u64,
 }
 
-/// 扫描全部 Agent 并构建一份新的 `TuiSnapshot`。
-pub fn load_snapshot(catalog: &PricingCatalog) -> Result<TuiSnapshot> {
-    let started = Instant::now();
-    let events = adapters::scan_agents(&Agent::ALL, TimeRange::ALL, catalog)?;
-    let report = aggregate::aggregate(&events, Granularity::Daily);
+/// 计算热窗起点时间戳（本地时区 30 天前 00:00）。
+pub fn hot_window_cutoff_ms() -> Result<i64> {
+    let range = TimeRange::last_n(Granularity::Daily, HOT_WINDOW_DAYS)?;
+    Ok(range.start_ms)
+}
 
-    // 每日汇总行改为时间倒序（最新日期排在最上面）
-    let mut daily_rows = report.overall.rows;
-    daily_rows.reverse();
+/// 扫描全部内置 Agent 在指定半开时间窗内的事件。
+pub fn scan_range(range: TimeRange, catalog: &PricingCatalog) -> Result<Vec<UsageEvent>> {
+    adapters::scan_agents(&Agent::ALL, range, catalog)
+}
 
-    // 构建全量模型汇总表与按天拆分的明细表
-    let mut model_rows: Vec<ModelRow> = Vec::with_capacity(report.groups.len());
-    let mut daily_breakdowns: HashMap<String, Vec<ModelRow>> = HashMap::new();
-    // 按 (日期, 模型) 聚合堆叠柱分段（同一模型跨渠道/Agent 在柱图中归并同色）
+/// 将事件列表聚合成完整的 `TuiSnapshot`（纯内存计算，零 I/O）。
+pub fn build_snapshot(events: &[UsageEvent], is_partial: bool, load_ms: u64) -> TuiSnapshot {
+    let daily_report = aggregate::aggregate(events, Granularity::Daily);
+    let hourly_report = aggregate::aggregate(events, Granularity::Hourly);
+    let weekly_report = aggregate::aggregate(events, Granularity::Weekly);
+    let monthly_report = aggregate::aggregate(events, Granularity::Monthly);
+
+    // 从日聚合中顺手提取堆叠柱分段与全量模型汇总，避免重复遍历
     let mut chart_by_day: HashMap<String, BTreeMap<String, u64>> = HashMap::new();
+    let mut model_rows: Vec<ModelRow> = Vec::with_capacity(daily_report.groups.len());
 
-    for group in report.groups {
+    for group in &daily_report.groups {
         for day_row in &group.rows {
-            let date_key = day_row.label.clone();
-            let day_tokens = day_row.total_tokens();
-            if day_tokens > 0 {
-                let model_map = chart_by_day.entry(date_key.clone()).or_default();
+            let tokens = day_row.total_tokens();
+            if tokens > 0 {
+                let model_map = chart_by_day.entry(day_row.label.clone()).or_default();
                 let entry = model_map.entry(group.model.clone()).or_insert(0);
-                *entry = entry.saturating_add(day_tokens);
+                *entry = entry.saturating_add(tokens);
             }
-
-            daily_breakdowns.entry(date_key).or_default().push(ModelRow {
-                agent: group.agent,
-                provider: group.provider.clone(),
-                model: group.model.clone(),
-                metrics: day_row.clone(),
-            });
         }
-
         model_rows.push(ModelRow {
             agent: group.agent,
-            provider: group.provider,
-            model: group.model,
-            metrics: group.total,
+            provider: group.provider.clone(),
+            model: group.model.clone(),
+            metrics: group.total.clone(),
         });
     }
-
-    // 首页模型表与每日明细表统一按总 token 使用量降序，同量按名称稳定排序
     sort_by_tokens_desc(&mut model_rows);
-    for rows in daily_breakdowns.values_mut() {
-        sort_by_tokens_desc(rows);
+
+    let overall_total = daily_report.overall.total.clone();
+    let unknown_models = daily_report.unknown_models.clone();
+
+    let daily = report_into_period(daily_report);
+    let hourly = report_into_period(hourly_report);
+    let weekly = report_into_period(weekly_report);
+    let monthly = report_into_period(monthly_report);
+
+    let mut sessions_by_agent: HashMap<Agent, Vec<SessionDetail>> =
+        HashMap::with_capacity(Agent::ALL.len());
+    for agent in Agent::ALL {
+        let details = session::summarize_sessions_with_turns(events, agent);
+        sessions_by_agent.insert(agent, details);
     }
 
     let now = ZonedDateTime::now();
@@ -127,16 +153,47 @@ pub fn load_snapshot(catalog: &PricingCatalog) -> Result<TuiSnapshot> {
         now.second()
     );
 
-    Ok(TuiSnapshot {
-        overall_total: report.overall.total,
-        daily_rows,
-        daily_breakdowns,
+    TuiSnapshot {
+        overall_total,
+        hourly,
+        daily,
+        weekly,
+        monthly,
+        sessions_by_agent,
         model_rows,
         chart_days,
-        unknown_models: report.unknown_models,
+        unknown_models,
+        is_partial,
         updated_at,
-        load_ms: started.elapsed().as_millis() as u64,
-    })
+        load_ms,
+    }
+}
+
+/// 将单次 `Report` 转换为时间倒序的 `PeriodData`（每个分桶内按 token 降序）。
+fn report_into_period(report: Report) -> PeriodData {
+    let mut rows = report.overall.rows;
+    rows.reverse();
+
+    let mut breakdowns: HashMap<String, Vec<ModelRow>> = HashMap::new();
+    for group in report.groups {
+        for bucket_row in group.rows {
+            breakdowns
+                .entry(bucket_row.label.clone())
+                .or_default()
+                .push(ModelRow {
+                    agent: group.agent,
+                    provider: group.provider.clone(),
+                    model: group.model.clone(),
+                    metrics: bucket_row,
+                });
+        }
+    }
+
+    for items in breakdowns.values_mut() {
+        sort_by_tokens_desc(items);
+    }
+
+    PeriodData { rows, breakdowns }
 }
 
 /// 按总 token 使用量降序排列模型行。
