@@ -2,7 +2,7 @@
 //!
 //! 两层粒度（不展开到碎步骤）：
 //! - 会话列表：按最后活跃时间倒序展示完整对话；
-//! - 单会话详情：按 ID 前缀匹配唯一会话，或一次性按 Agent 聚合全量会话与按时间升序排列的 Turn 列表。
+//! - 单会话详情：按 ID 前缀匹配唯一会话，或一次性按 Agent 聚合全量会话与按时间倒序排列（最新在最前）的 Turn 列表。
 
 mod render;
 
@@ -67,7 +67,7 @@ pub struct TurnSummary {
     pub speed_tokens: u64,
 }
 
-/// 单个会话的完整视图：总览摘要 + 按时间升序排列的 Turn 列表。
+/// 单个会话的完整视图：总览摘要 + 按时间倒序排列（最新在最前）的 Turn 列表。
 #[derive(Debug, Clone)]
 pub struct SessionDetail {
     pub summary: SessionSummary,
@@ -233,7 +233,7 @@ impl MetricsAcc {
     }
 }
 
-/// 将 Turn 映射表按首次出现时间升序转为带 1-based 编号的 `TurnSummary` 列表。
+/// 将 Turn 映射表先按首次出现时间升序分配 1-based 编号（`#1..#N`），再倒序返回（最新轮次排最前）。
 fn finalize_turns(by_turn: HashMap<String, MetricsAcc>) -> Vec<TurnSummary> {
     let mut entries: Vec<(String, MetricsAcc)> = by_turn.into_iter().collect();
     entries.sort_by(|a, b| {
@@ -241,11 +241,13 @@ fn finalize_turns(by_turn: HashMap<String, MetricsAcc>) -> Vec<TurnSummary> {
             .cmp(&b.1.first_ts_ms)
             .then_with(|| a.0.cmp(&b.0))
     });
-    entries
+    let mut turns: Vec<TurnSummary> = entries
         .into_iter()
         .enumerate()
         .map(|(idx, (turn_id, acc))| acc.into_turn_summary(idx + 1, turn_id))
-        .collect()
+        .collect();
+    turns.reverse();
+    turns
 }
 
 impl SessionSummary {
@@ -381,7 +383,7 @@ pub fn summarize_sessions(events: &[UsageEvent]) -> Vec<SessionSummary> {
 
 /// 一次性将事件流中指定 Agent 的事件聚合为完整会话及 Turn 明细。
 ///
-/// 返回的会话按最后活跃时间倒序排列，每个会话内的 Turn 按首次出现时间升序排列。
+/// 返回的会话按最后活跃时间倒序排列，每个会话内的 Turn 也按时间倒序排列（最新在最前，保留 `#1..#N` 原编号）。
 pub fn summarize_sessions_with_turns(events: &[UsageEvent], agent: Agent) -> Vec<SessionDetail> {
     struct SessionTurnsState {
         label: Option<String>,
@@ -583,8 +585,10 @@ mod tests {
         let detail = find_session_detail(&events, "abc1").unwrap();
         assert_eq!(detail.summary.session_id, "abc11111-xxxx");
         assert_eq!(detail.turns.len(), 2);
-        assert_eq!(detail.turns[0].steps, 2);
-        assert_eq!(detail.turns[1].steps, 1);
+        assert_eq!(detail.turns[0].index, 2);
+        assert_eq!(detail.turns[0].steps, 1);
+        assert_eq!(detail.turns[1].index, 1);
+        assert_eq!(detail.turns[1].steps, 2);
 
         assert!(find_session_detail(&events, "abc").is_err());
         assert!(find_session_detail(&events, "zzz").is_err());
@@ -594,8 +598,8 @@ mod tests {
         assert_eq!(dsh_details[0].summary.session_id, "abc22222-yyyy");
         assert_eq!(dsh_details[1].summary.session_id, "abc11111-xxxx");
         assert_eq!(dsh_details[1].turns.len(), 2);
-        assert_eq!(dsh_details[1].turns[0].index, 1);
-        assert_eq!(dsh_details[1].turns[1].index, 2);
+        assert_eq!(dsh_details[1].turns[0].index, 2);
+        assert_eq!(dsh_details[1].turns[1].index, 1);
 
         let agy_details = summarize_sessions_with_turns(&events, Agent::Agy);
         assert!(agy_details.is_empty());

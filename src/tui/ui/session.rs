@@ -298,7 +298,7 @@ fn render_sessions_table(
     }
 }
 
-/// 下半区：当前选中会话的逐个 Turn 轮次明细（按时间升序）。
+/// 下半区：当前选中会话的逐个 Turn 轮次明细（最新轮次排最前）。
 #[allow(clippy::too_many_arguments)]
 fn render_turns_table(
     frame: &mut Frame,
