@@ -13,10 +13,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-use crate::model::Usage;
+use crate::core::model::Usage;
 
 /// 编译期嵌入的默认 `config/models.json`，保证零配置即可运行。
-const DEFAULT_MODELS_JSON: &str = include_str!("../config/models.json");
+const DEFAULT_MODELS_JSON: &str = include_str!("../../config/models.json");
 
 /// 当前支持的 `models.json` 结构版本号。
 const SUPPORTED_SCHEMA_VERSION: u32 = 1;

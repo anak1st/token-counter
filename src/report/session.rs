@@ -9,8 +9,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::{bail, Result};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::model::UsageEvent;
-use crate::time::format_datetime;
+use crate::core::model::UsageEvent;
+use crate::core::time::format_datetime;
 
 /// 单个会话的聚合摘要。
 #[derive(Debug, Clone)]
@@ -721,7 +721,7 @@ fn format_span(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Agent, Usage};
+    use crate::core::model::{Agent, Usage};
 
     fn make_event(session: &str, turn: &str, ts_ms: i64, input: u64, output: u64) -> UsageEvent {
         UsageEvent {

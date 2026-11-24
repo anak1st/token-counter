@@ -9,9 +9,9 @@ pub mod opencode;
 
 use anyhow::Result;
 
-use crate::model::{Agent, UsageEvent};
-use crate::pricing::PricingCatalog;
-use crate::time::TimeRange;
+use crate::core::model::{Agent, UsageEvent};
+use crate::core::pricing::PricingCatalog;
+use crate::core::time::TimeRange;
 
 /// 统一的适配器查询意图，供时间报表与会话查询共用。
 #[derive(Debug, Clone)]

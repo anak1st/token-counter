@@ -6,8 +6,10 @@
 //!
 //! 注意：`clap` 帮助文案通过显式英文 `about`/`help` 属性提供，保证终端输出全英文。
 
+pub mod spinner;
+
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use token_counter::model::Agent;
+use token_counter::core::model::Agent;
 
 // 顶层 CLI 定义
 #[derive(Debug, Parser)]

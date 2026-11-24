@@ -6,15 +6,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::{Agent, UsageEvent};
-use crate::pricing::ModelPricing;
-use crate::time::{bucket_key, Granularity};
+use crate::core::model::{Agent, UsageEvent};
+use crate::core::pricing::ModelPricing;
+use crate::core::time::{bucket_key, Granularity};
 
 /// 单个时间分桶（或 `Total` 合计行）的聚合指标。
 #[derive(Debug, Clone, PartialEq)]
 pub struct BucketRow {
     /// 分桶标签（如 `2026-11-23`、`2026-11-23 16:00`、`2026-W48`、`2026-11` 或 `Total`）。
     pub label: String,
+    /// 本分桶内的模型请求次数。
+    pub requests: u64,
     pub input: u64,
     pub output: u64,
     pub reasoning: u64,
@@ -34,6 +36,7 @@ impl BucketRow {
     pub fn empty(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
+            requests: 0,
             input: 0,
             output: 0,
             reasoning: 0,
@@ -88,6 +91,7 @@ impl BucketRow {
 
     /// 将单条已计价事件累加到本行。
     pub fn add_event(&mut self, event: &UsageEvent) {
+        self.requests = self.requests.saturating_add(1);
         self.input = self.input.saturating_add(event.usage.input);
         self.output = self.output.saturating_add(event.usage.output);
         self.reasoning = self.reasoning.saturating_add(event.usage.reasoning);
@@ -116,6 +120,7 @@ impl BucketRow {
 
     /// 将另一条聚合行折叠合并到本行。
     pub fn fold(&mut self, other: &BucketRow) {
+        self.requests = self.requests.saturating_add(other.requests);
         self.input = self.input.saturating_add(other.input);
         self.output = self.output.saturating_add(other.output);
         self.reasoning = self.reasoning.saturating_add(other.reasoning);

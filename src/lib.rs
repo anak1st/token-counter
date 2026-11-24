@@ -1,11 +1,8 @@
 //! token-counter 核心库入口。
 //!
-//! 将领域模型、价目表、时间分桶、数据源 adapter、聚合、会话分析与纯文本渲染与 CLI/TUI 入口解耦。
+//! 按职责拆分为三层：`core`（领域基础）、`adapters`（本地数据源只读采集）、`report`（聚合与纯文本输出），
+//! 与可执行入口层的 `cli` 和 `tui` 解耦。
 
 pub mod adapters;
-pub mod aggregate;
-pub mod model;
-pub mod pricing;
-pub mod render;
-pub mod session;
-pub mod time;
+pub mod core;
+pub mod report;

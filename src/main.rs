@@ -1,19 +1,17 @@
 //! token-counter 可执行程序入口。
 
 mod cli;
-mod spinner;
+mod tui;
 
 use anyhow::Result;
 use clap::Parser;
 use token_counter::adapters::{self, ScanQuery};
-use token_counter::aggregate;
-use token_counter::pricing::PricingCatalog;
-use token_counter::render;
-use token_counter::session;
-use token_counter::time::{Granularity, TimeRange};
+use token_counter::core::pricing::PricingCatalog;
+use token_counter::core::time::{Granularity, TimeRange};
+use token_counter::report::{aggregate, render, session};
 
+use crate::cli::spinner::Spinner;
 use crate::cli::{Cli, Command, ReportArgs, SessionArgs};
-use crate::spinner::Spinner;
 
 /// 未指定 `-n` 时的默认分桶数 / 会话条数。
 const DEFAULT_HOURS: u32 = 24;
@@ -22,13 +20,9 @@ const DEFAULT_WEEKS: u32 = 12;
 const DEFAULT_MONTHS: u32 = 12;
 const DEFAULT_SESSIONS: usize = 20;
 
-/// 交互式 TUI 模式入口占位（Step 4 实现）。
-fn run_tui(catalog: &PricingCatalog) -> Result<()> {
-    println!(
-        "TUI mode (not yet implemented): models={}",
-        catalog.model_count()
-    );
-    Ok(())
+/// 启动交互式 TUI 模式。
+fn run_tui(catalog: PricingCatalog) -> Result<()> {
+    tui::run(catalog)
 }
 
 /// 执行单次时间维度统计并将纯文本对齐表格打印到标准输出。
@@ -82,7 +76,7 @@ fn main() -> Result<()> {
     let (catalog, _source) = PricingCatalog::resolve(None)?;
 
     match cli.command {
-        None | Some(Command::Tui) => run_tui(&catalog),
+        None | Some(Command::Tui) => run_tui(catalog),
         Some(Command::Hourly(args)) => {
             run_report(Granularity::Hourly, args, DEFAULT_HOURS, &catalog)
         }

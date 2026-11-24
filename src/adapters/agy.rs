@@ -19,9 +19,9 @@ use std::time::UNIX_EPOCH;
 use anyhow::Result;
 use rusqlite::{params, Connection, OpenFlags};
 
-use crate::model::{Agent, Usage, UsageEvent};
-use crate::pricing::{calc_cost_usd, PricingCatalog};
-use crate::time::TimeRange;
+use crate::core::model::{Agent, Usage, UsageEvent};
+use crate::core::pricing::{calc_cost_usd, PricingCatalog};
+use crate::core::time::TimeRange;
 
 const STEP_TYPE_PLANNER: i64 = 15;
 const STEP_STATUS_DONE: i64 = 3;

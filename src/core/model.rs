@@ -3,7 +3,7 @@
 //! Agent 强绑定各自的本地格式解析器（SQLite、zstd JSONL、protobuf），因此内化为
 //! Rust 代码；模型元数据与官方美元价目表独立维护在 `config/models.json` 中。
 
-use crate::pricing::ModelPricing;
+use crate::core::pricing::ModelPricing;
 
 /// 当前支持的 AI 编程 Agent 集合。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
