@@ -103,6 +103,7 @@ pub fn render(
         models_area,
         &models_title,
         &window_models,
+        None,
         table_state,
         focus == FocusPane::Lower,
     );

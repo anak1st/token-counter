@@ -55,12 +55,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> 
     ])
     .style(table_header_style());
 
-    let widths = [
-        Constraint::Min(22),
-        Constraint::Length(8),
-        Constraint::Length(10),
-        Constraint::Length(10),
-    ];
+    let mut w_sessions = "Sessions".len();
+    let mut w_tokens = 7usize; // 覆盖 `<0.001M` 与 `99.999M`，更大时动态扩宽
+    let mut w_cost = 7usize; // 覆盖 `$99.999`，更大时动态扩宽
 
     let mut rows: Vec<Row> = Vec::with_capacity(options.len());
     for &opt in &options {
@@ -88,17 +85,31 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> 
             None => (0, 0, 0.0),
         };
 
+        let s_text = format_int(sessions_count);
+        let t_text = format_tokens_m(tokens);
+        let c_text = format_cost(cost_usd);
+        w_sessions = w_sessions.max(s_text.len());
+        w_tokens = w_tokens.max(t_text.len());
+        w_cost = w_cost.max(c_text.len());
+
         let name_line = Line::from(vec![marker, Span::raw(label_text)]);
-        let cost_cell = Cell::from(Line::from(format_cost(cost_usd)).right_aligned())
+        let cost_cell = Cell::from(Line::from(c_text).right_aligned())
             .style(Style::default().fg(Color::Green));
 
         rows.push(Row::new([
             Cell::from(name_line),
-            Cell::from(Line::from(format_int(sessions_count)).right_aligned()),
-            Cell::from(Line::from(format_tokens_m(tokens)).right_aligned()),
+            Cell::from(Line::from(s_text).right_aligned()),
+            Cell::from(Line::from(t_text).right_aligned()),
             cost_cell,
         ]));
     }
+
+    let widths = [
+        Constraint::Min(22),
+        Constraint::Length(w_sessions as u16),
+        Constraint::Length(w_tokens as u16),
+        Constraint::Length(w_cost as u16),
+    ];
 
     let table = Table::new(rows, widths)
         .header(header)

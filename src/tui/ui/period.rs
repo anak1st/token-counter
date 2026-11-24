@@ -1,15 +1,15 @@
 //! 通用时间维度 Tab 视图（共用一套上下联动双表渲染 `Hour` / `Day` / `Week` / `Month`）。
 //!
 //! 上半区 60%：按时间倒序的滚动主表（最新在最上面）；
-//! 下半区 40%：当前选中时间分桶的统一 `Models` 面板（支持 `Tab` 切焦点与鼠标点击/滚轮滚动）。
+//! 下半区 40%：当前选中时间分桶的统一 `Models` 面板（两表共用动态算出的右侧数值列宽，严格垂直对齐）。
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use super::models_panel::{
-    self, metrics_table_header, metrics_table_row, metrics_table_widths, TABLE_COL_SPACING,
+    self, compute_metrics_widths, metrics_table_header, metrics_table_row, TABLE_COL_SPACING,
     WIDE_TABLE_THRESHOLD,
 };
 use super::style::{
@@ -51,23 +51,31 @@ pub fn render(
     }
 
     let (upper_area, models_area) = split_upper_and_models(area);
+    let wide = upper_area.width >= WIDE_TABLE_THRESHOLD;
+    let breakdown = App::selected_period_breakdown(period, table_state);
+
+    // 仅按上半主表全集计算共享列宽：子行均不超父行总量，上下翻行时整张表完全零抖动
+    let shared_widths = compute_metrics_widths(period.rows.iter(), wide);
 
     let upper_hit = render_period_table(
         frame,
         upper_area,
         &spec,
         period,
+        wide,
+        &shared_widths,
         table_state,
         focus == FocusPane::Upper,
     );
 
-    let lower_hit = App::selected_period_breakdown(period, table_state).map(|(label, items)| {
+    let lower_hit = breakdown.map(|(label, items)| {
         let title = format!("Models · {} (by tokens)", label);
         models_panel::render(
             frame,
             models_area,
             &title,
             items,
+            Some(&shared_widths),
             detail_table,
             focus == FocusPane::Lower,
         )
@@ -77,28 +85,29 @@ pub fn render(
 }
 
 /// 上半区：时间倒序主表（聚焦时亮白框 + 青色高亮行，失焦时暗灰框保留选中行指示）。
+#[allow(clippy::too_many_arguments)]
 fn render_period_table(
     frame: &mut Frame,
     area: Rect,
     spec: &PeriodViewSpec,
     period: &PeriodData,
+    wide: bool,
+    widths: &[Constraint],
     table_state: &mut TableState,
     focused: bool,
 ) -> TableHit {
     let title = format!("{} ({} {})", spec.panel_name, period.rows.len(), spec.unit_name);
     let block = panel_block(&title, focused);
     let inner = block.inner(area);
-    let wide = area.width >= WIDE_TABLE_THRESHOLD;
 
     let header = metrics_table_header(spec.first_col, wide);
-    let widths = metrics_table_widths(wide);
 
     let mut rows: Vec<Row> = Vec::with_capacity(period.rows.len());
     for row in &period.rows {
         rows.push(metrics_table_row(Cell::from(row.label.as_str()), row, wide));
     }
 
-    let table = Table::new(rows, widths)
+    let table = Table::new(rows, widths.to_vec())
         .header(header)
         .block(block)
         .column_spacing(TABLE_COL_SPACING)
