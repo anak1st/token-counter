@@ -5,7 +5,7 @@ mod spinner;
 
 use anyhow::Result;
 use clap::Parser;
-use token_counter::adapters;
+use token_counter::adapters::{self, ScanQuery};
 use token_counter::aggregate;
 use token_counter::pricing::PricingCatalog;
 use token_counter::render;
@@ -56,15 +56,17 @@ fn run_session(args: SessionArgs, catalog: &PricingCatalog) -> Result<()> {
     let agent = args.agent.into_agent();
 
     let loading = Spinner::start("Loading...");
-    let events = adapters::scan_agent(agent, TimeRange::ALL, catalog)?;
-
     let output = match args.id {
         Some(ref id_prefix) => {
+            let query = ScanQuery::SessionPrefix(id_prefix.clone());
+            let events = adapters::scan_agent(agent, &query, catalog)?;
             let detail = session::find_session_detail(&events, id_prefix)?;
             session::render_session_detail(&detail)
         }
         None => {
             let limit = args.last.unwrap_or(DEFAULT_SESSIONS);
+            let query = ScanQuery::RecentSessions { limit };
+            let events = adapters::scan_agent(agent, &query, catalog)?;
             let list = session::summarize_sessions(&events);
             session::render_session_list(&list, limit)
         }

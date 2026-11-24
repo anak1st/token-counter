@@ -208,10 +208,15 @@ pub fn render_report(report: &Report) -> String {
     lines.join("\n")
 }
 
-/// 向输出追加一个 `(provider, model)` 分组段落。
+/// 向输出追加一个 `(agent, provider, model)` 分组段落。
 fn render_group(lines: &mut Vec<String>, first_header: &str, group: &ModelGroup, widths: &[usize; 6]) {
     lines.push(String::new());
-    lines.push(format!("{} · {}", group.provider, group.model));
+    lines.push(format!(
+        "{} · {} · {}",
+        group.agent.id(),
+        group.provider,
+        group.model
+    ));
     lines.push(format_price_line(&group.pricing));
     lines.extend(render_table(first_header, &group.rows, &group.total, widths));
 }

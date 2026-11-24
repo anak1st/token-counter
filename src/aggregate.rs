@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::model::UsageEvent;
+use crate::model::{Agent, UsageEvent};
 use crate::pricing::ModelPricing;
 use crate::time::{bucket_key, Granularity};
 
@@ -129,9 +129,10 @@ impl BucketRow {
     }
 }
 
-/// 单个 `(provider, model)` 分组，包含升序分桶行与末尾 `Total`。
+/// 单个 `(agent, provider, model)` 分组，包含升序分桶行与末尾 `Total`。
 #[derive(Debug, Clone)]
 pub struct ModelGroup {
+    pub agent: Agent,
     pub provider: String,
     pub model: String,
     pub pricing: ModelPricing,
@@ -152,14 +153,17 @@ pub struct Report {
     pub granularity: Granularity,
     pub overall: Overall,
     pub groups: Vec<ModelGroup>,
-    /// 本次查询中未匹配到价目表的 `provider/model` 列表。
+    /// 本次查询中未匹配到价目表的 `agent/provider/model` 列表。
     pub unknown_models: Vec<String>,
 }
 
 /// 将归一化事件列表聚合为总计表、有价分组表与未知模型列表。
 pub fn aggregate(events: &[UsageEvent], granularity: Granularity) -> Report {
-    let mut grouped: BTreeMap<(String, String), (ModelPricing, BTreeMap<String, BucketRow>)> =
-        BTreeMap::new();
+    // 按 (agent_id, provider, model) 字典序分组，确保输出顺序稳定
+    let mut grouped: BTreeMap<
+        (&'static str, String, String),
+        (Agent, ModelPricing, BTreeMap<String, BucketRow>),
+    > = BTreeMap::new();
     let mut unknown_set: BTreeSet<String> = BTreeSet::new();
 
     for event in events {
@@ -172,19 +176,24 @@ pub fn aggregate(events: &[UsageEvent], granularity: Granularity) -> Report {
         let pricing = match event.pricing {
             Some(ref pricing) => pricing.clone(),
             None => {
-                unknown_set.insert(format!("{}/{}", provider, event.model));
+                unknown_set.insert(format!(
+                    "{}/{}/{}",
+                    event.agent.id(),
+                    provider,
+                    event.model
+                ));
                 continue;
             }
         };
 
-        let key = (provider, event.model.clone());
+        let key = (event.agent.id(), provider, event.model.clone());
         let entry = grouped
             .entry(key)
-            .or_insert_with(|| (pricing, BTreeMap::new()));
+            .or_insert_with(|| (event.agent, pricing, BTreeMap::new()));
 
         let bucket = bucket_key(event.ts_ms, granularity);
         let row = entry
-            .1
+            .2
             .entry(bucket.clone())
             .or_insert_with(|| BucketRow::empty(bucket));
         row.add_event(event);
@@ -193,7 +202,7 @@ pub fn aggregate(events: &[UsageEvent], granularity: Granularity) -> Report {
     let mut groups = Vec::with_capacity(grouped.len());
     let mut overall_by_bucket: BTreeMap<String, BucketRow> = BTreeMap::new();
 
-    for ((provider, model), (pricing, bucket_map)) in grouped {
+    for ((_agent_id, provider, model), (agent, pricing, bucket_map)) in grouped {
         let mut rows = Vec::with_capacity(bucket_map.len());
         let mut total = BucketRow::empty("Total");
 
@@ -209,6 +218,7 @@ pub fn aggregate(events: &[UsageEvent], granularity: Granularity) -> Report {
         }
 
         groups.push(ModelGroup {
+            agent,
             provider,
             model,
             pricing,
