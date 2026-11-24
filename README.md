@@ -39,7 +39,7 @@ token-counter tui
 
 | Tab | 说明 |
 |---|---|
-| `Overview` | 顶部全量 KPI + 按终端宽度自适应柱数的堆叠柱状图（支持 `Days` / `Hours` 切换）+ 底部全量 `agent · provider · model` 明细 |
+| `Overview` | 顶部左全量汇总（`Days/Reqs/Tokens/Cost`）+ 右 `Days/Hours` 切换；中部自适应宽度可横向滚动堆叠柱图；底部随柱图时间窗联动的 `Models` 明细 |
 | `Hour` | 按小时倒序汇总 + 下方选中小时的模型明细 |
 | `Day` | 按天倒序汇总 + 下方选中日期的模型明细 |
 | `Week` | 按 ISO 周倒序汇总 + 下方选中周的模型明细 |
@@ -59,9 +59,10 @@ token-counter tui
 | `←` / `→` / `h` / `l` 或鼠标点击 Tab | 切换顶部视图 |
 | `Tab` / `Enter` 或鼠标点击面板 | 在上下两个子框之间切换焦点（聚焦框以白色边框高亮） |
 | `a` 或鼠标点击顶部 `Agent: ... [a]` | 打开 Agent 筛选弹窗（全 6 个视图共用，含 `all` 与各 Agent 会话数/用量/费用） |
-| `t` 或鼠标点击 `Days │ Hours` | 在 `Overview` 切换柱状图按天 / 按小时展示（KPI 与 Models 仍保持全量） |
+| `t` 或鼠标点击顶栏 `Days │ Hours` | 在 `Overview` 切换柱状图按天 / 按小时展示（下方 `Models` 时间范围同步联动） |
+| `[` / `]` 或鼠标点击 `[< Prev]` / `[Next >]` | 在 `Overview` 向更早 / 更新移动柱状图时间范围 |
 | `u` 或鼠标点击底栏 `N unknown [u]` | 打开未知模型列表弹窗（查看未配置价格的 `agent · provider · model`） |
-| `↑` / `↓` / `j` / `k` / `PgUp` / `PgDn` / `g` / `G` 或鼠标滚轮 | 滚动当前焦点列表（滚轮支持悬停直接滚动对应子框） |
+| `↑` / `↓` / `j` / `k` / `PgUp` / `PgDn` / `g` / `G` 或鼠标滚轮 | 滚动当前焦点框（在 `Overview` 聚焦或悬停柱状图时为横向滚动历史时间窗） |
 | `Esc` | 关闭弹窗、从下方子框退回上方主表或退出 TUI |
 | `r` | 立即刷新今日增量数据 |
 | `q` / `Ctrl+C` | 退出 TUI |

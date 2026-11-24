@@ -76,11 +76,6 @@ impl Tab {
             Tab::Session => Tab::Month,
         }
     }
-
-    /// 是否为包含「上表 + 下表」双滚动框的视图。
-    pub fn has_dual_panes(self) -> bool {
-        self != Tab::Overview
-    }
 }
 
 /// 双表视图当前的键盘滚动焦点（上半主表 vs 下半联动子表）。
@@ -131,6 +126,16 @@ pub struct UiLayout {
     /// 首页柱状图内 `Days` 与 `Hours` 切换按钮区域。
     pub chart_days_rect: Option<Rect>,
     pub chart_hours_rect: Option<Rect>,
+    /// 首页柱状图外框热区与左上/右上 `[< Prev]` / `[Next >]` 时间移动按钮热区。
+    pub chart_panel_rect: Option<Rect>,
+    pub chart_prev_rect: Option<Rect>,
+    pub chart_next_rect: Option<Rect>,
+    /// 首页柱状图每次点击翻页按钮的步长（半屏柱数）。
+    pub chart_page_step: usize,
+    /// 首页柱状图当前屏幕宽度下允许的最大横向回滚偏移量。
+    pub chart_max_offset: usize,
+    /// 首页底部 Models 面板当前可视窗口内的行数。
+    pub overview_models_len: usize,
     /// 底部状态栏 `N unknown [u]` 可点击徽章区域。
     pub unknown_badge_rect: Option<Rect>,
     /// 上半主表热区（`Hour` / `Day` / `Week` / `Month` / `Session`）。
@@ -161,6 +166,8 @@ pub struct App {
     pub agent_filter: Option<Agent>,
     /// 首页柱状图时间粒度（默认按天，可切按小时）。
     pub chart_mode: ChartMode,
+    /// 首页柱状图横向滚动偏移量（`0` 表示最右侧为当前最新天/小时，越大越往历史回滚）。
+    pub chart_offset: usize,
     /// 当前打开的居中弹窗（`None` 表示无弹窗）。
     pub active_modal: Option<ActiveModal>,
     /// 当前弹窗内的滚动选中状态。
@@ -191,9 +198,10 @@ impl App {
             spinner_tick: 0,
             agent_filter: None,
             chart_mode: ChartMode::Days,
+            chart_offset: 0,
             active_modal: None,
             modal_table: initial_table_state(),
-            focus: FocusPane::Upper,
+            focus: FocusPane::Lower,
             overview_table: initial_table_state(),
             hour_table: initial_table_state(),
             day_table: initial_table_state(),
@@ -288,14 +296,47 @@ impl App {
         view.sessions.get(idx)
     }
 
-    /// 切换顶部 Tab，并将焦点复位到上半主表与明细首行。
+    /// 切换顶部 Tab，并将焦点复位到该视图默认主框（`Overview` 默认下表，其余默认上表）。
     pub fn switch_tab(&mut self, tab: Tab) {
         if self.current_tab == tab {
             return;
         }
         self.current_tab = tab;
-        self.focus = FocusPane::Upper;
+        self.focus = if tab == Tab::Overview {
+            FocusPane::Lower
+        } else {
+            FocusPane::Upper
+        };
         self.reset_detail_selection();
+    }
+
+    /// 切换首页柱状图 `Days` / `Hours` 粒度，并将横向滚动复位到最新。
+    pub fn set_chart_mode(&mut self, mode: ChartMode) {
+        if self.chart_mode == mode {
+            return;
+        }
+        self.chart_mode = mode;
+        self.chart_offset = 0;
+        self.overview_table = initial_table_state();
+    }
+
+    /// 横向滚动首页柱状图（`delta > 0` 往更早历史滚动，`< 0` 往最新时间滚动）。
+    pub fn scroll_chart(&mut self, delta: isize) {
+        let max_off = self.layout.chart_max_offset as isize;
+        let next = (self.chart_offset as isize + delta).clamp(0, max_off) as usize;
+        if next != self.chart_offset {
+            self.chart_offset = next;
+            self.overview_table = initial_table_state();
+        }
+    }
+
+    /// 将首页柱状图直接跳到指定横向偏移量。
+    pub fn jump_chart(&mut self, offset: usize) {
+        let clamped = offset.min(self.layout.chart_max_offset);
+        if clamped != self.chart_offset {
+            self.chart_offset = clamped;
+            self.overview_table = initial_table_state();
+        }
     }
 
     /// 打开 Agent 选择弹窗，并默认高亮当前生效的选项。
@@ -337,7 +378,12 @@ impl App {
 
         if self.agent_filter != choice {
             self.agent_filter = choice;
-            self.focus = FocusPane::Upper;
+            self.chart_offset = 0;
+            self.focus = if self.current_tab == Tab::Overview {
+                FocusPane::Lower
+            } else {
+                FocusPane::Upper
+            };
             self.reset_all_tables();
         }
     }
@@ -354,11 +400,8 @@ impl App {
         }
     }
 
-    /// 在双表视图的上下两个框之间切换键盘滚动焦点。
+    /// 在上下两个框之间切换键盘滚动焦点。
     pub(super) fn toggle_focus_pane(&mut self) {
-        if !self.current_tab.has_dual_panes() {
-            return;
-        }
         match self.focus {
             FocusPane::Upper => {
                 if self.lower_list_len() > 0 {
@@ -372,7 +415,7 @@ impl App {
         }
     }
 
-    /// 当前 Tab 上半主表的行数（`Overview` 无上半表，返回 0）。
+    /// 当前 Tab 上半主表的行数（`Overview` 为柱状图，不走列表行数）。
     pub(super) fn upper_list_len(&self) -> usize {
         let view = match self.active_view() {
             Some(v) => v,
@@ -395,7 +438,7 @@ impl App {
             None => return 0,
         };
         match self.current_tab {
-            Tab::Overview => view.model_rows.len(),
+            Tab::Overview => self.layout.overview_models_len,
             Tab::Hour => Self::selected_period_breakdown(&view.hourly, &self.hour_table)
                 .map(|(_, items)| items.len())
                 .unwrap_or(0),
@@ -417,25 +460,38 @@ impl App {
 
     /// 当前焦点表的行数。
     pub(super) fn focused_list_len(&self) -> usize {
-        if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
+        if self.focus == FocusPane::Lower {
             self.lower_list_len()
         } else {
             self.upper_list_len()
         }
     }
 
-    /// 滚动当前焦点表。
+    /// 滚动当前焦点框（`Overview` 聚焦柱状图时横向滚动）。
     pub(super) fn scroll_focused(&mut self, delta: isize) {
-        if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
+        if self.current_tab == Tab::Overview && self.focus == FocusPane::Upper {
+            // 向上键/滚轮上滚往更早历史回滚（+），向下键/滚轮下滚往最新滚动（-）
+            self.scroll_chart(-delta);
+            return;
+        }
+        if self.focus == FocusPane::Lower {
             self.scroll_lower(delta);
         } else {
             self.scroll_upper(delta);
         }
     }
 
-    /// 跳转当前焦点表到指定索引。
+    /// 跳转当前焦点框到指定位置（`Overview` 聚焦柱状图时：`0` 跳最早，其余跳最新）。
     pub(super) fn jump_focused(&mut self, index: usize) {
-        if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
+        if self.current_tab == Tab::Overview && self.focus == FocusPane::Upper {
+            if index == 0 {
+                self.jump_chart(self.layout.chart_max_offset);
+            } else {
+                self.jump_chart(0);
+            }
+            return;
+        }
+        if self.focus == FocusPane::Lower {
             self.jump_lower(index);
         } else {
             self.jump_upper(index);
@@ -591,11 +647,10 @@ impl App {
 
     /// 将下半联动明细表的选中行复位到首行。
     fn reset_detail_selection(&mut self) {
-        let len = if self.current_tab.has_dual_panes() {
-            self.lower_list_len()
-        } else {
-            0
-        };
+        if self.current_tab == Tab::Overview {
+            return;
+        }
+        let len = self.lower_list_len();
         self.detail_table = TableState::default();
         if len > 0 {
             self.detail_table.select(Some(0));
@@ -604,7 +659,8 @@ impl App {
 
     /// 将下半联动明细表的选中行裁剪到合法范围内。
     fn clamp_detail_selection(&mut self) {
-        if !self.current_tab.has_dual_panes() {
+        if self.current_tab == Tab::Overview {
+            clamp_selection(&mut self.overview_table, self.layout.overview_models_len);
             return;
         }
         let len = self.lower_list_len();
@@ -612,6 +668,22 @@ impl App {
             self.focus = FocusPane::Upper;
         }
         clamp_selection(&mut self.detail_table, len);
+    }
+
+    /// 在 `Overview` 渲染完成后裁剪 `chart_offset` 与 `overview_table` 选中行。
+    pub fn clamp_overview_window(
+        &mut self,
+        max_offset: usize,
+        page_step: usize,
+        models_len: usize,
+    ) {
+        self.layout.chart_max_offset = max_offset;
+        self.layout.chart_page_step = page_step.max(1);
+        self.layout.overview_models_len = models_len;
+        if self.chart_offset > max_offset {
+            self.chart_offset = max_offset;
+        }
+        clamp_selection(&mut self.overview_table, models_len);
     }
 }
 

@@ -28,7 +28,17 @@ impl App {
                 KeyAction::None
             }
             KeyCode::Char('t') if self.current_tab == Tab::Overview => {
-                self.chart_mode = self.chart_mode.toggle();
+                self.set_chart_mode(self.chart_mode.toggle());
+                KeyAction::None
+            }
+            KeyCode::Char('[') if self.current_tab == Tab::Overview => {
+                let step = self.layout.chart_page_step.max(1) as isize;
+                self.scroll_chart(step);
+                KeyAction::None
+            }
+            KeyCode::Char(']') if self.current_tab == Tab::Overview => {
+                let step = self.layout.chart_page_step.max(1) as isize;
+                self.scroll_chart(-step);
                 KeyAction::None
             }
             KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter => {
@@ -36,8 +46,13 @@ impl App {
                 KeyAction::None
             }
             KeyCode::Esc => {
-                if self.current_tab.has_dual_panes() && self.focus == FocusPane::Lower {
-                    self.focus = FocusPane::Upper;
+                let default_pane = if self.current_tab == Tab::Overview {
+                    FocusPane::Lower
+                } else {
+                    FocusPane::Upper
+                };
+                if self.focus != default_pane {
+                    self.focus = default_pane;
                     KeyAction::None
                 } else {
                     KeyAction::Quit
@@ -73,9 +88,13 @@ impl App {
                 KeyAction::None
             }
             KeyCode::End | KeyCode::Char('G') => {
-                let len = self.focused_list_len();
-                if len > 0 {
-                    self.jump_focused(len - 1);
+                if self.current_tab == Tab::Overview && self.focus == FocusPane::Upper {
+                    self.jump_chart(0);
+                } else {
+                    let len = self.focused_list_len();
+                    if len > 0 {
+                        self.jump_focused(len - 1);
+                    }
                 }
                 KeyAction::None
             }
@@ -105,6 +124,12 @@ impl App {
             MouseEventKind::Down(MouseButton::Left) => self.handle_left_click(col, row),
             MouseEventKind::ScrollUp => self.handle_mouse_scroll(col, row, -1),
             MouseEventKind::ScrollDown => self.handle_mouse_scroll(col, row, 1),
+            MouseEventKind::ScrollLeft if self.current_tab == Tab::Overview => {
+                self.scroll_chart(1);
+            }
+            MouseEventKind::ScrollRight if self.current_tab == Tab::Overview => {
+                self.scroll_chart(-1);
+            }
             _ => {}
         }
     }
@@ -127,14 +152,37 @@ impl App {
 
         if let Some(days_rect) = self.layout.chart_days_rect {
             if rect_contains(days_rect, col, row) {
-                self.chart_mode = ChartMode::Days;
+                self.set_chart_mode(ChartMode::Days);
                 return;
             }
         }
 
         if let Some(hours_rect) = self.layout.chart_hours_rect {
             if rect_contains(hours_rect, col, row) {
-                self.chart_mode = ChartMode::Hours;
+                self.set_chart_mode(ChartMode::Hours);
+                return;
+            }
+        }
+
+        if let Some(prev_rect) = self.layout.chart_prev_rect {
+            if rect_contains(prev_rect, col, row) && self.current_tab == Tab::Overview {
+                let step = self.layout.chart_page_step.max(1) as isize;
+                self.scroll_chart(step);
+                return;
+            }
+        }
+
+        if let Some(next_rect) = self.layout.chart_next_rect {
+            if rect_contains(next_rect, col, row) && self.current_tab == Tab::Overview {
+                let step = self.layout.chart_page_step.max(1) as isize;
+                self.scroll_chart(-step);
+                return;
+            }
+        }
+
+        if let Some(chart_rect) = self.layout.chart_panel_rect {
+            if rect_contains(chart_rect, col, row) && self.current_tab == Tab::Overview {
+                self.focus = FocusPane::Upper;
                 return;
             }
         }
@@ -147,7 +195,7 @@ impl App {
         }
 
         if let Some(upper) = self.layout.upper {
-            if rect_contains(upper.panel, col, row) && self.current_tab.has_dual_panes() {
+            if rect_contains(upper.panel, col, row) {
                 self.focus = FocusPane::Upper;
                 if let Some(rows_rect) = upper.rows {
                     if rect_contains(rows_rect, col, row) {
@@ -160,7 +208,7 @@ impl App {
 
         if let Some(lower) = self.layout.lower {
             if rect_contains(lower.panel, col, row) {
-                if self.current_tab.has_dual_panes() && self.lower_list_len() > 0 {
+                if self.lower_list_len() > 0 {
                     self.focus = FocusPane::Lower;
                 }
                 if let Some(rows_rect) = lower.rows {
@@ -208,8 +256,17 @@ impl App {
 
     /// 根据鼠标悬停位置滚动对应的子框（未命中任何框时滚动当前焦点框）。
     fn handle_mouse_scroll(&mut self, col: u16, row: u16, delta: isize) {
+        if self.current_tab == Tab::Overview {
+            if let Some(chart_rect) = self.layout.chart_panel_rect {
+                if rect_contains(chart_rect, col, row) {
+                    // 悬停或聚焦在柱状图上时，滚轮上滚往更早历史滚动，下滚往最新滚动
+                    self.scroll_chart(-delta);
+                    return;
+                }
+            }
+        }
         if let Some(upper) = self.layout.upper {
-            if rect_contains(upper.panel, col, row) && self.current_tab.has_dual_panes() {
+            if rect_contains(upper.panel, col, row) {
                 self.scroll_upper(delta);
                 return;
             }

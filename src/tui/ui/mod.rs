@@ -20,7 +20,7 @@ use ratatui::widgets::{Paragraph, Tabs};
 use ratatui::Frame;
 
 use self::style::{spinner_frame, styled_block};
-use super::app::{ActiveModal, App, FocusPane, Tab, UiLayout};
+use super::app::{ActiveModal, App, Tab, UiLayout};
 
 /// 主入口：绘制整帧 TUI 并刷新本帧鼠标交互热区。
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -47,19 +47,33 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         match app.current_tab {
             Tab::Overview => {
-                if let Some(snap) = app.snapshot.as_ref() {
+                let hits = if let Some(snap) = app.snapshot.as_ref() {
                     let view = snap.view(app.agent_filter);
-                    let hits = overview::render(
+                    Some(overview::render(
                         frame,
                         sections[1],
                         view,
                         snap.is_partial,
                         app.chart_mode,
+                        app.chart_offset,
+                        app.focus,
                         &mut app.overview_table,
-                    );
+                    ))
+                } else {
+                    None
+                };
+                if let Some(hits) = hits {
                     app.layout.lower = Some(hits.lower);
+                    app.layout.chart_panel_rect = Some(hits.chart_panel);
                     app.layout.chart_days_rect = hits.chart_days;
                     app.layout.chart_hours_rect = hits.chart_hours;
+                    app.layout.chart_prev_rect = hits.chart_prev;
+                    app.layout.chart_next_rect = hits.chart_next;
+                    app.clamp_overview_window(
+                        hits.chart_max_offset,
+                        hits.chart_page_step,
+                        hits.window_models_len,
+                    );
                 }
             }
             Tab::Hour => {
@@ -303,28 +317,20 @@ fn render_footer(frame: &mut Frame, app: &mut App, area: Rect) {
             Span::styled(" close", Style::default().fg(Color::DarkGray)),
         ]),
         None => {
-            let mut hint_spans = vec![
+            let hint_spans = vec![
                 Span::styled(" ←/→", Style::default().fg(Color::Cyan)),
                 Span::styled(" view  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Tab", Style::default().fg(Color::Cyan)),
+                Span::styled(" pane  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("a", Style::default().fg(Color::Cyan)),
+                Span::styled(" agent  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("↑/↓", Style::default().fg(Color::Cyan)),
+                Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("r", Style::default().fg(Color::Cyan)),
+                Span::styled(" refresh  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("q", Style::default().fg(Color::Cyan)),
+                Span::styled(" quit", Style::default().fg(Color::DarkGray)),
             ];
-
-            if app.current_tab.has_dual_panes() {
-                hint_spans.push(Span::styled("Tab", Style::default().fg(Color::Cyan)));
-                if app.focus == FocusPane::Lower {
-                    hint_spans.push(Span::styled(" upper  ", Style::default().fg(Color::DarkGray)));
-                } else {
-                    hint_spans.push(Span::styled(" pane  ", Style::default().fg(Color::DarkGray)));
-                }
-            }
-
-            hint_spans.push(Span::styled("a", Style::default().fg(Color::Cyan)));
-            hint_spans.push(Span::styled(" agent  ", Style::default().fg(Color::DarkGray)));
-            hint_spans.push(Span::styled("↑/↓", Style::default().fg(Color::Cyan)));
-            hint_spans.push(Span::styled(" scroll  ", Style::default().fg(Color::DarkGray)));
-            hint_spans.push(Span::styled("r", Style::default().fg(Color::Cyan)));
-            hint_spans.push(Span::styled(" refresh  ", Style::default().fg(Color::DarkGray)));
-            hint_spans.push(Span::styled("q", Style::default().fg(Color::Cyan)));
-            hint_spans.push(Span::styled(" quit", Style::default().fg(Color::DarkGray)));
             Line::from(hint_spans)
         }
     };
@@ -406,7 +412,7 @@ mod tests {
 
     use super::style::{format_axis_tokens, nice_axis_ceil};
     use super::*;
-    use crate::tui::app::{ChartMode, KeyAction};
+    use crate::tui::app::{ChartMode, FocusPane, KeyAction};
     use crate::tui::data::{ModelRow, PeriodData, TuiSnapshot, ViewSnapshot};
 
     fn empty_view() -> ViewSnapshot {
@@ -517,10 +523,21 @@ mod tests {
             }],
         };
 
+        let mut older_day = day_row.clone();
+        older_day.label = "2026-09-01".to_string();
+
+        let mut daily_breakdowns = HashMap::new();
+        daily_breakdowns.insert(day_row.label.clone(), vec![model_row.clone()]);
+        daily_breakdowns.insert(older_day.label.clone(), vec![model_row.clone()]);
+        let daily_period = PeriodData {
+            rows: vec![day_row.clone(), older_day],
+            breakdowns: daily_breakdowns,
+        };
+
         let dsh_view = ViewSnapshot {
             overall_total: day_row.clone(),
             hourly: make_period(hour_row),
-            daily: make_period(day_row),
+            daily: daily_period,
             weekly: make_period(week_row),
             monthly: make_period(month_row),
             model_rows: vec![model_row],
@@ -558,9 +575,27 @@ mod tests {
             terminal.draw(|f| render(f, &mut app)).unwrap();
         }
 
-        // 在 `Overview` 点击柱状图 `Hours` / `Days` 切换，以及点击底栏 `1 unknown [u]` 打开弹窗
+        // 在 `Overview` 验证点击 `[< Prev]` / `[Next >]` 移动时间窗、点击顶栏 `Hours` 切换以及底栏 `1 unknown [u]`
         app.switch_tab(Tab::Overview);
         terminal.draw(|f| render(f, &mut app)).unwrap();
+        assert!(app.layout.chart_max_offset > 0);
+        let prev_rect = app.layout.chart_prev_rect.unwrap();
+        let next_rect = app.layout.chart_next_rect.unwrap();
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: prev_rect.x + 1,
+            row: prev_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert!(app.chart_offset > 0);
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: next_rect.x + 1,
+            row: next_rect.y,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.chart_offset, 0);
+
         let hours_rect = app.layout.chart_hours_rect.unwrap();
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -569,6 +604,7 @@ mod tests {
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(app.chart_mode, ChartMode::Hours);
+        assert_eq!(app.chart_offset, 0);
 
         let badge_rect = app.layout.unknown_badge_rect.unwrap();
         app.handle_mouse(MouseEvent {

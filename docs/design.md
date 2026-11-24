@@ -63,7 +63,7 @@ src/
         ├── style.rs          # 圆角边框、聚焦高亮、模型配色、滚动条与 1 位有效数字 Y 轴
         ├── agent_picker.rs   # 可滚动居中 Agent 筛选弹窗（含 All 与各 Agent 汇总）
         ├── unknown_modal.rs  # 精简未知模型弹窗（列出未命中价目表的 agent · provider · model）
-        ├── overview.rs       # 全量 KPI + 自适应宽度 Days/Hours 堆叠柱状图 + 全量 Models 面板
+        ├── overview.rs       # 精简全量 Summary + 可横向滚动对称柱状图 + 窗口联动 Models 面板
         ├── period.rs         # Hour / Day / Week / Month 通用上下联动双表
         ├── models_panel.rs   # 统一 Models 面板与跨表共享的右侧数值列宽
         └── session.rs        # 会话列表（支持 All 与单 Agent）+ 逐个 Turns 明细
