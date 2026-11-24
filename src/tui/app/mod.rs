@@ -1,18 +1,20 @@
-//! TUI 应用状态与键盘 / 鼠标交互处理。
+//! TUI 应用状态模型与表格滚动/裁剪逻辑（键盘与鼠标事件处理位于 `input.rs`）。
 //!
 //! 支持 `Overview`、`Hour`、`Day`、`Week`、`Month`、`Session` 六个视图：
-//! - 全部六个视图共用同一套 Agent 筛选（支持 `All` 与任意单个 Agent），按 `a` 或点击按钮打开弹窗；
-//! - `←/→/h/l` 切换顶部视图，`Tab` 在上下两个子框之间切换焦点（`Hour`/`Day`/`Week`/`Month`/`Session`）；
-//! - 支持鼠标左键点击（Tab、Agent 按钮、上下框行、弹窗行）与悬停滚轮滚动。
+//! - 全部六个视图共用同一套 Agent 筛选（支持 `All` 与任意单个 Agent）；
+//! - 双表视图通过 `FocusPane` 统一管理上下框焦点与联动明细表滚动；
+//! - `UiLayout` 记录每帧渲染的热区，供鼠标点击与悬停滚轮精准命中。
+
+mod input;
 
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
 use token_counter::core::model::Agent;
+use token_counter::report::session::SessionDetail;
 
-use super::data::{ModelRow, PeriodData, SessionItem, TuiSnapshot, ViewSnapshot};
+use super::data::{ModelRow, PeriodData, TuiSnapshot, ViewSnapshot};
 
 /// 后台自动刷新周期（60 秒）。
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -279,8 +281,8 @@ impl App {
         Some((row.label.as_str(), breakdown))
     }
 
-    /// 返回当前 `Session` Tab 选中的会话条目。
-    pub fn selected_session(&self) -> Option<&SessionItem> {
+    /// 返回当前 `Session` Tab 选中的会话详情。
+    pub fn selected_session(&self) -> Option<&SessionDetail> {
         let view = self.active_view()?;
         let idx = self.session_table.selected()?;
         view.sessions.get(idx)
@@ -341,7 +343,7 @@ impl App {
     }
 
     /// 返回当前打开弹窗的行数。
-    fn modal_list_len(&self) -> usize {
+    pub(super) fn modal_list_len(&self) -> usize {
         match self.active_modal {
             Some(ActiveModal::AgentPicker) => self.picker_options().len(),
             Some(ActiveModal::UnknownModels) => self
@@ -352,265 +354,8 @@ impl App {
         }
     }
 
-    /// 处理单次键盘事件。
-    pub fn handle_key(&mut self, key: KeyEvent) -> KeyAction {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return KeyAction::Quit;
-        }
-
-        // 任意弹窗打开时独占键盘输入
-        if let Some(modal) = self.active_modal {
-            self.handle_modal_key(modal, key);
-            return KeyAction::None;
-        }
-
-        match key.code {
-            KeyCode::Char('a') => {
-                self.open_agent_picker();
-                KeyAction::None
-            }
-            KeyCode::Char('u') => {
-                self.open_unknown_models();
-                KeyAction::None
-            }
-            KeyCode::Char('t') if self.current_tab == Tab::Overview => {
-                self.chart_mode = self.chart_mode.toggle();
-                KeyAction::None
-            }
-            KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter => {
-                self.toggle_focus_pane();
-                KeyAction::None
-            }
-            KeyCode::Esc => {
-                if self.current_tab.has_dual_panes() && self.focus == FocusPane::Lower {
-                    self.focus = FocusPane::Upper;
-                    KeyAction::None
-                } else {
-                    KeyAction::Quit
-                }
-            }
-            KeyCode::Char('q') => KeyAction::Quit,
-            KeyCode::Right | KeyCode::Char('l') => {
-                self.switch_tab(self.current_tab.next());
-                KeyAction::None
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                self.switch_tab(self.current_tab.prev());
-                KeyAction::None
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll_focused(-1);
-                KeyAction::None
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll_focused(1);
-                KeyAction::None
-            }
-            KeyCode::PageUp => {
-                self.scroll_focused(-10);
-                KeyAction::None
-            }
-            KeyCode::PageDown => {
-                self.scroll_focused(10);
-                KeyAction::None
-            }
-            KeyCode::Home | KeyCode::Char('g') => {
-                self.jump_focused(0);
-                KeyAction::None
-            }
-            KeyCode::End | KeyCode::Char('G') => {
-                let len = self.focused_list_len();
-                if len > 0 {
-                    self.jump_focused(len - 1);
-                }
-                KeyAction::None
-            }
-            KeyCode::Char('r') => {
-                if !self.refreshing {
-                    self.refreshing = true;
-                    return KeyAction::RefreshNow;
-                }
-                KeyAction::None
-            }
-            _ => KeyAction::None,
-        }
-    }
-
-    /// 处理单次鼠标事件（左键点击选中 / 切换 Tab / 开关弹窗，滚轮悬停滚动）。
-    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
-        let col = mouse.column;
-        let row = mouse.row;
-
-        // 弹窗打开时由弹窗独占鼠标交互
-        if let Some(modal) = self.active_modal {
-            self.handle_modal_mouse(modal, mouse);
-            return;
-        }
-
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(btn_rect) = self.layout.agent_button_rect {
-                    if rect_contains(btn_rect, col, row) {
-                        self.open_agent_picker();
-                        return;
-                    }
-                }
-
-                if let Some(badge_rect) = self.layout.unknown_badge_rect {
-                    if rect_contains(badge_rect, col, row) {
-                        self.open_unknown_models();
-                        return;
-                    }
-                }
-
-                if let Some(days_rect) = self.layout.chart_days_rect {
-                    if rect_contains(days_rect, col, row) {
-                        self.chart_mode = ChartMode::Days;
-                        return;
-                    }
-                }
-
-                if let Some(hours_rect) = self.layout.chart_hours_rect {
-                    if rect_contains(hours_rect, col, row) {
-                        self.chart_mode = ChartMode::Hours;
-                        return;
-                    }
-                }
-
-                for &(tab, rect) in &self.layout.tab_rects {
-                    if rect_contains(rect, col, row) {
-                        self.switch_tab(tab);
-                        return;
-                    }
-                }
-
-                if let Some(upper) = self.layout.upper {
-                    if rect_contains(upper.panel, col, row) && self.current_tab.has_dual_panes() {
-                        self.focus = FocusPane::Upper;
-                        if let Some(rows_rect) = upper.rows {
-                            if rect_contains(rows_rect, col, row) {
-                                self.click_upper_row((row - rows_rect.y) as usize);
-                            }
-                        }
-                        return;
-                    }
-                }
-
-                if let Some(lower) = self.layout.lower {
-                    if rect_contains(lower.panel, col, row) {
-                        if self.current_tab.has_dual_panes() && self.lower_list_len() > 0 {
-                            self.focus = FocusPane::Lower;
-                        }
-                        if let Some(rows_rect) = lower.rows {
-                            if rect_contains(rows_rect, col, row) {
-                                self.click_lower_row((row - rows_rect.y) as usize);
-                            }
-                        }
-                    }
-                }
-            }
-            MouseEventKind::ScrollUp => self.handle_mouse_scroll(col, row, -1),
-            MouseEventKind::ScrollDown => self.handle_mouse_scroll(col, row, 1),
-            _ => {}
-        }
-    }
-
-    /// 处理弹窗打开时的鼠标点击与滚轮事件。
-    fn handle_modal_mouse(&mut self, modal: ActiveModal, mouse: MouseEvent) {
-        let col = mouse.column;
-        let row = mouse.row;
-        let len = self.modal_list_len();
-
-        match mouse.kind {
-            MouseEventKind::ScrollUp => scroll_table(&mut self.modal_table, len, -1),
-            MouseEventKind::ScrollDown => scroll_table(&mut self.modal_table, len, 1),
-            MouseEventKind::Down(MouseButton::Left) => {
-                let hit = match self.layout.modal {
-                    Some(m) => m,
-                    None => return,
-                };
-                if let Some(rows_rect) = hit.rows {
-                    if rect_contains(rows_rect, col, row) {
-                        let idx = self.modal_table.offset() + (row - rows_rect.y) as usize;
-                        if idx < len {
-                            self.modal_table.select(Some(idx));
-                            if modal == ActiveModal::AgentPicker {
-                                self.confirm_agent_picker();
-                            }
-                        }
-                        return;
-                    }
-                }
-                if !rect_contains(hit.panel, col, row) {
-                    self.active_modal = None;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// 根据鼠标悬停位置滚动对应的子框（未命中任何框时滚动当前焦点框）。
-    fn handle_mouse_scroll(&mut self, col: u16, row: u16, delta: isize) {
-        if let Some(upper) = self.layout.upper {
-            if rect_contains(upper.panel, col, row) && self.current_tab.has_dual_panes() {
-                self.scroll_upper(delta);
-                return;
-            }
-        }
-        if let Some(lower) = self.layout.lower {
-            if rect_contains(lower.panel, col, row) {
-                self.scroll_lower(delta);
-                return;
-            }
-        }
-        self.scroll_focused(delta);
-    }
-
-    /// 处理当前打开弹窗内的键盘操作。
-    fn handle_modal_key(&mut self, modal: ActiveModal, key: KeyEvent) {
-        let len = self.modal_list_len();
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => {
-                self.active_modal = None;
-            }
-            KeyCode::Char('a') if modal == ActiveModal::AgentPicker => {
-                self.active_modal = None;
-            }
-            KeyCode::Char('u') if modal == ActiveModal::UnknownModels => {
-                self.active_modal = None;
-            }
-            KeyCode::Enter | KeyCode::Char(' ') => match modal {
-                ActiveModal::AgentPicker => self.confirm_agent_picker(),
-                ActiveModal::UnknownModels => self.active_modal = None,
-            },
-            KeyCode::Up | KeyCode::Char('k') => {
-                scroll_table(&mut self.modal_table, len, -1);
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                scroll_table(&mut self.modal_table, len, 1);
-            }
-            KeyCode::PageUp => {
-                scroll_table(&mut self.modal_table, len, -10);
-            }
-            KeyCode::PageDown => {
-                scroll_table(&mut self.modal_table, len, 10);
-            }
-            KeyCode::Home | KeyCode::Char('g') => {
-                if len > 0 {
-                    self.modal_table.select(Some(0));
-                }
-            }
-            KeyCode::End | KeyCode::Char('G') => {
-                if len > 0 {
-                    self.modal_table.select(Some(len - 1));
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// 在双表视图的上下两个框之间切换键盘滚动焦点。
-    fn toggle_focus_pane(&mut self) {
+    pub(super) fn toggle_focus_pane(&mut self) {
         if !self.current_tab.has_dual_panes() {
             return;
         }
@@ -628,7 +373,7 @@ impl App {
     }
 
     /// 当前 Tab 上半主表的行数（`Overview` 无上半表，返回 0）。
-    fn upper_list_len(&self) -> usize {
+    pub(super) fn upper_list_len(&self) -> usize {
         let view = match self.active_view() {
             Some(v) => v,
             None => return 0,
@@ -644,7 +389,7 @@ impl App {
     }
 
     /// 当前 Tab 下半表（`Models` 或 `Turns`）的行数。
-    fn lower_list_len(&self) -> usize {
+    pub(super) fn lower_list_len(&self) -> usize {
         let view = match self.active_view() {
             Some(v) => v,
             None => return 0,
@@ -665,13 +410,13 @@ impl App {
                 .unwrap_or(0),
             Tab::Session => self
                 .selected_session()
-                .map(|s| s.detail.turns.len())
+                .map(|s| s.turns.len())
                 .unwrap_or(0),
         }
     }
 
     /// 当前焦点表的行数。
-    fn focused_list_len(&self) -> usize {
+    pub(super) fn focused_list_len(&self) -> usize {
         if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
             self.lower_list_len()
         } else {
@@ -680,7 +425,7 @@ impl App {
     }
 
     /// 滚动当前焦点表。
-    fn scroll_focused(&mut self, delta: isize) {
+    pub(super) fn scroll_focused(&mut self, delta: isize) {
         if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
             self.scroll_lower(delta);
         } else {
@@ -689,7 +434,7 @@ impl App {
     }
 
     /// 跳转当前焦点表到指定索引。
-    fn jump_focused(&mut self, index: usize) {
+    pub(super) fn jump_focused(&mut self, index: usize) {
         if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
             self.jump_lower(index);
         } else {
@@ -698,7 +443,7 @@ impl App {
     }
 
     /// 滚动上半主表；若选中行变化，自动将下半联动表复位到首行。
-    fn scroll_upper(&mut self, delta: isize) {
+    pub(super) fn scroll_upper(&mut self, delta: isize) {
         let len = self.upper_list_len();
         if len == 0 {
             return;
@@ -734,7 +479,7 @@ impl App {
     }
 
     /// 鼠标点击上半表第 `rel_row` 可见行。
-    fn click_upper_row(&mut self, rel_row: usize) {
+    pub(super) fn click_upper_row(&mut self, rel_row: usize) {
         let len = self.upper_list_len();
         let table = match self.upper_table_mut() {
             Some(t) => t,
@@ -751,7 +496,7 @@ impl App {
     }
 
     /// 滚动下半表（`Overview` 的 `Models` 或双表视图的联动子表）。
-    fn scroll_lower(&mut self, delta: isize) {
+    pub(super) fn scroll_lower(&mut self, delta: isize) {
         let len = self.lower_list_len();
         if len == 0 {
             return;
@@ -770,7 +515,7 @@ impl App {
     }
 
     /// 鼠标点击下半表第 `rel_row` 可见行。
-    fn click_lower_row(&mut self, rel_row: usize) {
+    pub(super) fn click_lower_row(&mut self, rel_row: usize) {
         let len = self.lower_list_len();
         let table = self.lower_table_mut();
         let target = table.offset() + rel_row;
@@ -810,7 +555,7 @@ impl App {
         self.clamp_all_tables();
     }
 
-    /// 按当前快照裁剪全部表格的选中索引。
+    /// 按当前快照裁剪全部表格（含打开中的未知模型弹窗）的选中索引。
     fn clamp_all_tables(&mut self) {
         let (overview_len, hour_len, day_len, week_len, month_len, session_len) =
             match self.active_view() {
@@ -833,6 +578,15 @@ impl App {
         clamp_selection(&mut self.session_table, session_len);
 
         self.clamp_detail_selection();
+
+        if self.active_modal == Some(ActiveModal::UnknownModels) {
+            let unknown_len = self.modal_list_len();
+            if unknown_len == 0 {
+                self.active_modal = None;
+            } else {
+                clamp_selection(&mut self.modal_table, unknown_len);
+            }
+        }
     }
 
     /// 将下半联动明细表的选中行复位到首行。
@@ -861,21 +615,13 @@ impl App {
     }
 }
 
-/// 判断终端坐标 `(col, row)` 是否落在矩形 `rect` 内。
-fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
-    col >= rect.x
-        && col < rect.x.saturating_add(rect.width)
-        && row >= rect.y
-        && row < rect.y.saturating_add(rect.height)
-}
-
 fn initial_table_state() -> TableState {
     let mut state = TableState::default();
     state.select(Some(0));
     state
 }
 
-fn scroll_table(state: &mut TableState, len: usize, delta: isize) {
+pub(super) fn scroll_table(state: &mut TableState, len: usize, delta: isize) {
     if len == 0 {
         return;
     }

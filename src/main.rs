@@ -45,22 +45,22 @@ fn run_report(
     Ok(())
 }
 
-/// 执行单 Agent 的会话列表或单会话 Turn 明细查询。
+/// 执行会话列表或单会话 Turn 明细查询（支持 `all` 与单个具体 Agent）。
 fn run_session(args: SessionArgs, catalog: &PricingCatalog) -> Result<()> {
-    let agent = args.agent.into_agent();
+    let agents = args.agent.agents();
 
     let loading = Spinner::start("Loading...");
     let output = match args.id {
         Some(ref id_prefix) => {
             let query = ScanQuery::SessionPrefix(id_prefix.clone());
-            let events = adapters::scan_agent(agent, &query, catalog)?;
+            let events = adapters::scan_agents_query(&agents, &query, catalog)?;
             let detail = session::find_session_detail(&events, id_prefix)?;
             session::render_session_detail(&detail)
         }
         None => {
             let limit = args.last.unwrap_or(DEFAULT_SESSIONS);
             let query = ScanQuery::RecentSessions { limit };
-            let events = adapters::scan_agent(agent, &query, catalog)?;
+            let events = adapters::scan_agents_query(&agents, &query, catalog)?;
             let list = session::summarize_sessions(&events);
             session::render_session_list(&list, limit)
         }

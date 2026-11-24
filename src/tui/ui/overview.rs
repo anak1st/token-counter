@@ -9,9 +9,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, TableState};
 use ratatui::Frame;
 
-use super::{
-    format_axis_tokens, format_cache, format_cost, format_int, format_speed, format_tokens_m,
-    format_ttft, model_color, models_panel, nice_axis_ceil, split_upper_and_models, styled_block,
+use token_counter::core::format::{
+    format_cost, format_int, format_percent, format_speed, format_tokens_m, format_ttft,
+};
+
+use super::models_panel;
+use super::style::{
+    format_axis_tokens, model_color, nice_axis_ceil, split_upper_and_models, styled_block,
 };
 use crate::tui::app::{ChartMode, TableHit};
 use crate::tui::data::{PeriodData, ViewSnapshot};
@@ -98,7 +102,7 @@ fn render_kpi_bar(frame: &mut Frame, view: &ViewSnapshot, is_partial: bool, area
         ("Reqs ", format_int(total.requests), Color::White),
         ("Tokens ", format_tokens_m(total.total_tokens()), Color::Cyan),
         ("Cost ", format_cost(total.cost_usd), Color::Green),
-        ("Cache ", format_cache(total.cache_percent()), Color::Yellow),
+        ("Cache ", format_percent(total.cache_percent()), Color::Yellow),
         ("TTFT ", format_ttft(total.avg_ttft_secs()), Color::Magenta),
         ("Speed ", format_speed(total.avg_speed_tps()), Color::LightCyan),
     ];

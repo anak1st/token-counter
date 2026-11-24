@@ -12,7 +12,7 @@ use super::models_panel::{
     self, metrics_table_header, metrics_table_row, metrics_table_widths, TABLE_COL_SPACING,
     WIDE_TABLE_THRESHOLD,
 };
-use super::{
+use super::style::{
     panel_block, render_scrollbar, split_upper_and_models, styled_block, table_rows_rect,
     upper_highlight_style,
 };

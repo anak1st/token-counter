@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Clear, Row, Table};
 use ratatui::Frame;
 
-use super::{
+use super::style::{
     centered_rect, highlight_style, panel_block, render_scrollbar, table_header_style,
     table_rows_rect,
 };

@@ -10,18 +10,19 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
+use token_counter::core::format::{
+    format_compact_tokens, format_cost, format_percent, format_span, format_speed, format_tokens_m,
+    format_ttft, short_id, truncate_width,
+};
 use token_counter::core::time::format_datetime;
-use token_counter::report::session::TurnSummary;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use token_counter::report::session::{SessionDetail, TurnSummary};
 
 use super::models_panel::TABLE_COL_SPACING;
-use super::{
-    format_cache, format_cost, format_speed, format_tokens_m, format_ttft, highlight_style,
-    model_color, panel_block, render_scrollbar, split_upper_and_models, styled_block,
-    table_header_style, table_rows_rect, upper_highlight_style,
+use super::style::{
+    highlight_style, model_color, panel_block, render_scrollbar, split_upper_and_models,
+    styled_block, table_header_style, table_rows_rect, upper_highlight_style,
 };
 use crate::tui::app::{FocusPane, TableHit};
-use crate::tui::data::SessionItem;
 
 /// 展开完整列（含 `PeakCtx / Cache% / TTFT` 与完整年份时间）所需的最小终端宽度。
 const WIDE_SESSION_THRESHOLD: u16 = 126;
@@ -30,7 +31,7 @@ const WIDE_SESSION_THRESHOLD: u16 = 126;
 pub fn render(
     frame: &mut Frame,
     area: Rect,
-    sessions: &[SessionItem],
+    sessions: &[SessionDetail],
     show_agent_prefix: bool,
     session_table: &mut TableState,
     turn_table: &mut TableState,
@@ -47,11 +48,11 @@ pub fn render(
         focus == FocusPane::Upper,
     );
 
-    let selected_item = session_table.selected().and_then(|idx| sessions.get(idx));
+    let selected_detail = session_table.selected().and_then(|idx| sessions.get(idx));
     let lower_hit = render_turns_table(
         frame,
         lower_area,
-        selected_item,
+        selected_detail,
         show_agent_prefix,
         turn_table,
         focus == FocusPane::Lower,
@@ -64,7 +65,7 @@ pub fn render(
 fn render_sessions_table(
     frame: &mut Frame,
     area: Rect,
-    sessions: &[SessionItem],
+    sessions: &[SessionDetail],
     show_agent_prefix: bool,
     table_state: &mut TableState,
     focused: bool,
@@ -92,15 +93,15 @@ fn render_sessions_table(
     let model_budget = if wide { 16 } else { 14 };
 
     let mut rows: Vec<Row> = Vec::with_capacity(sessions.len());
-    for item in sessions {
-        let s = &item.detail.summary;
+    for detail in sessions {
+        let s = &detail.summary;
         let id_and_label = match s.label.as_deref() {
             Some(label) => format!("{} · {}", short_id(&s.session_id, 8), label),
             None => short_id(&s.session_id, 12),
         };
         let session_cell = if show_agent_prefix {
             Cell::from(Line::from(vec![
-                Span::styled(item.agent.id(), Style::default().fg(Color::DarkGray)),
+                Span::styled(s.agent.id(), Style::default().fg(Color::DarkGray)),
                 Span::styled(" · ", Style::default().fg(Color::DarkGray)),
                 Span::raw(id_and_label),
             ]))
@@ -124,7 +125,7 @@ fn render_sessions_table(
                 Cell::from(Line::from(s.steps.to_string()).right_aligned()),
                 Cell::from(Line::from(format_compact_tokens(s.peak_ctx)).right_aligned()),
                 Cell::from(Line::from(format_tokens_m(s.total_tokens())).right_aligned()),
-                Cell::from(Line::from(format_cache(s.cache_percent())).right_aligned()),
+                Cell::from(Line::from(format_percent(s.cache_percent())).right_aligned()),
                 cost_cell,
                 Cell::from(Line::from(format_ttft(s.avg_ttft_secs())).right_aligned()),
                 speed_cell,
@@ -162,13 +163,13 @@ fn render_sessions_table(
 fn render_turns_table(
     frame: &mut Frame,
     area: Rect,
-    item: Option<&SessionItem>,
+    detail: Option<&SessionDetail>,
     show_agent_prefix: bool,
     table_state: &mut TableState,
     focused: bool,
 ) -> TableHit {
-    let item = match item {
-        Some(it) => it,
+    let detail = match detail {
+        Some(d) => d,
         None => {
             let block = styled_block("Turns");
             let inner = block.inner(area);
@@ -185,11 +186,10 @@ fn render_turns_table(
         }
     };
 
-    let detail = &item.detail;
     let s = &detail.summary;
     let id_short = short_id(&s.session_id, 12);
     let prefix = if show_agent_prefix {
-        format!("{} · {}", item.agent.id(), id_short)
+        format!("{} · {}", s.agent.id(), id_short)
     } else {
         id_short
     };
@@ -267,7 +267,7 @@ fn build_turn_row(turn: &TurnSummary, wide: bool) -> Row<'static> {
             Cell::from(Line::from(turn.steps.to_string()).right_aligned()),
             Cell::from(Line::from(format_compact_tokens(turn.peak_ctx)).right_aligned()),
             Cell::from(Line::from(format_tokens_m(turn.total_tokens())).right_aligned()),
-            Cell::from(Line::from(format_cache(turn.cache_percent())).right_aligned()),
+            Cell::from(Line::from(format_percent(turn.cache_percent())).right_aligned()),
             cost_cell,
             Cell::from(Line::from(format_ttft(turn.avg_ttft_secs())).right_aligned()),
             speed_cell,
@@ -437,66 +437,5 @@ fn format_table_time(ts_ms: i64, wide: bool) -> String {
         full
     } else {
         full[5..].to_string()
-    }
-}
-
-/// 截取会话 ID 前 `max_chars` 个字符。
-fn short_id(id: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = id.chars().collect();
-    if chars.len() <= max_chars {
-        id.to_string()
-    } else {
-        chars[..max_chars].iter().collect()
-    }
-}
-
-/// 按终端显示宽度截断过长字符串并补省略号（兼容中英文混排）。
-fn truncate_width(text: &str, max_width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= max_width {
-        return text.to_string();
-    }
-    let budget = max_width.saturating_sub(1);
-    let mut used = 0usize;
-    let mut out = String::new();
-    for ch in text.chars() {
-        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + w > budget {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out.push('…');
-    out
-}
-
-/// 格式化紧凑上下文大小（如 `162k`、`1.2M`），用于 `PeakCtx` 列。
-fn format_compact_tokens(tokens: u64) -> String {
-    if tokens >= 1_000_000 {
-        format!("{:.1}M", tokens as f64 / 1_000_000.0)
-    } else if tokens >= 1_000 {
-        format!("{}k", (tokens as f64 / 1_000.0).round() as u64)
-    } else if tokens == 0 {
-        "—".to_string()
-    } else {
-        tokens.to_string()
-    }
-}
-
-/// 格式化轮次时间跨度（如 `42s`、`14m`、`2h15m`）。
-fn format_span(secs: u64) -> String {
-    if secs < 60 {
-        return format!("{}s", secs);
-    }
-    let mins = secs / 60;
-    if mins < 60 {
-        return format!("{}m", mins);
-    }
-    let hours = mins / 60;
-    let rem_mins = mins % 60;
-    if rem_mins == 0 {
-        format!("{}h", hours)
-    } else {
-        format!("{}h{}m", hours, rem_mins)
     }
 }

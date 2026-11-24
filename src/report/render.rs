@@ -5,32 +5,12 @@
 //! - 总计表与所有分组表共用同一套 6 列宽度，保证整段输出纵向对齐。
 //! - 费用统一以美元结算并展示（`$0.123`）。
 
+use crate::core::format::{format_cost, format_int, format_percent, format_speed, format_ttft};
 use crate::core::pricing::ModelPricing;
 use crate::report::aggregate::{BucketRow, ModelGroup, Report};
 
 /// 6 列的右对齐标志：`[时间桶, Tokens, Cache%, Cost, TTFT, Speed]`。
 const RIGHT_ALIGN: [bool; 6] = [false, true, true, true, true, true];
-
-/// 将无符号整数格式化为千分位逗号形式（如 `1,234,567`）。
-fn format_int(n: u64) -> String {
-    let raw = n.to_string();
-    let len = raw.len();
-    let mut out = String::with_capacity(len + len / 3);
-
-    for (idx, ch) in raw.chars().enumerate() {
-        if idx > 0 && (len - idx).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-
-    out
-}
-
-/// 格式化单行美元费用。
-fn format_cost(row: &BucketRow) -> String {
-    format!("${:.3}", row.cost_usd)
-}
 
 /// 格式化每百万 token 的美元单价：至少保留 2 位小数，低价位保留有效位至最多 4 位。
 fn format_unit_price(rate: f64) -> String {
@@ -59,26 +39,14 @@ fn format_price_line(pricing: &ModelPricing) -> String {
 
 /// 生成单行的 6 个单元格文案；空样本用 `—`。
 fn row_cells(row: &BucketRow) -> [String; 6] {
-    let tokens = format_int(row.total_tokens());
-
-    let cache = match row.cache_percent() {
-        Some(pct) => format!("{:.1}%", pct),
-        None => "—".to_string(),
-    };
-
-    let cost = format_cost(row);
-
-    let ttft = match row.avg_ttft_secs() {
-        Some(secs) => format!("{:.1}s", secs),
-        None => "—".to_string(),
-    };
-
-    let speed = match row.avg_speed_tps() {
-        Some(tps) => format!("{}/s", tps.round() as u64),
-        None => "—".to_string(),
-    };
-
-    [row.label.clone(), tokens, cache, cost, ttft, speed]
+    [
+        row.label.clone(),
+        format_int(row.total_tokens()),
+        format_percent(row.cache_percent()),
+        format_cost(row.cost_usd),
+        format_ttft(row.avg_ttft_secs()),
+        format_speed(row.avg_speed_tps()),
+    ]
 }
 
 /// 按字符数计算列宽（避免 `—` 等多字节 UTF-8 字符导致对齐错位）。

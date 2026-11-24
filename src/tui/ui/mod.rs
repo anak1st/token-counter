@@ -1,40 +1,26 @@
-//! TUI 三段式顶层渲染与公共视觉辅助。
+//! TUI 三段式顶层渲染调度（公共样式与几何辅助位于 `style.rs`）。
 //!
 //! 布局结构：
-//! - 顶部（3 行）：Tabs 导航栏（`Overview` | `Hour` | `Day` | `Week` | `Month` | `Session`）
+//! - 顶部（3 行）：Tabs 导航栏（`Overview` | `Hour` | `Day` | `Week` | `Month` | `Session`）+ 框内 Agent 按钮
 //! - 中间（弹性）：当前激活视图内容（首次加载中显示居中动画）
-//! - 底部（1 行）：快捷键提示与两段式 60s 自动刷新状态
+//! - 底部（1 行）：快捷键提示与 60s 自动刷新状态（含可点击未知模型徽章）
 
 mod agent_picker;
 mod models_panel;
 mod overview;
 mod period;
 mod session;
+mod style;
 mod unknown_modal;
 
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Tabs,
-};
+use ratatui::widgets::{Paragraph, Tabs};
 use ratatui::Frame;
 
+use self::style::{spinner_frame, styled_block};
 use super::app::{ActiveModal, App, FocusPane, Tab, UiLayout};
-
-/// 加载动画帧序列。
-const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// 模型配色表（兼容绝大多数深浅终端的 ANSI 命名色）。
-const MODEL_PALETTE: [Color; 7] = [
-    Color::Cyan,
-    Color::Magenta,
-    Color::Green,
-    Color::Yellow,
-    Color::Blue,
-    Color::LightRed,
-    Color::LightCyan,
-];
 
 /// 主入口：绘制整帧 TUI 并刷新本帧鼠标交互热区。
 pub fn render(frame: &mut Frame, app: &mut App) {
@@ -407,209 +393,6 @@ fn render_footer(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(Paragraph::new(status).alignment(Alignment::Right), chunks[1]);
 }
 
-// ============================================================================
-// 公共样式与数值格式化辅助
-// ============================================================================
-
-/// 统一将主区域按 60% / 40% 拆分为「上半主视图 + 下半联动明细面板」，
-/// 确保在各个 Tab 之间切换时底部框高度完全对齐不跳动。
-pub fn split_upper_and_models(area: Rect) -> (Rect, Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
-    (chunks[0], chunks[1])
-}
-
-/// 创建统一圆角边框面板（透明底色，自然融入用户终端主题）。
-pub fn styled_block(title: &str) -> Block<'_> {
-    Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(
-            format!(" {} ", title),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ))
-}
-
-/// 创建带聚焦状态切换的圆角边框面板（聚焦时纯白亮框，失焦时深灰边框）。
-pub fn panel_block(title: &str, focused: bool) -> Block<'_> {
-    if focused {
-        styled_block(title).border_style(Style::default().fg(Color::White))
-    } else {
-        styled_block(title)
-    }
-}
-
-/// 从带 1 行表头的表格内区算出实际数据行区域（供鼠标行点击命中计算）。
-pub fn table_rows_rect(inner: Rect) -> Rect {
-    Rect {
-        x: inner.x,
-        y: inner.y.saturating_add(1),
-        width: inner.width,
-        height: inner.height.saturating_sub(1),
-    }
-}
-
-/// 统一的表格选中行高亮样式（当前聚焦框）。
-pub fn highlight_style() -> Style {
-    Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-}
-
-/// 上半主表行高亮样式：聚焦时青色高亮，失焦时暗灰反白以保留当前选中分桶/会话指示。
-pub fn upper_highlight_style(focused: bool) -> Style {
-    if focused {
-        highlight_style()
-    } else {
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::REVERSED)
-    }
-}
-
-/// 在给定区域内计算居中矩形（供各弹窗共用）。
-pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 2;
-    Rect::new(x, y, width, height)
-}
-
-/// 当表格数据行数超过可视区域时，在右边框绘制垂直滚动条。
-pub fn render_scrollbar(
-    frame: &mut Frame,
-    area: Rect,
-    inner: Rect,
-    total_rows: usize,
-    selected: Option<usize>,
-) {
-    let visible_rows = inner.height.saturating_sub(1) as usize;
-    if total_rows > visible_rows {
-        let mut sb_state = ScrollbarState::new(total_rows).position(selected.unwrap_or(0));
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            area,
-            &mut sb_state,
-        );
-    }
-}
-
-/// 统一的表格表头样式。
-pub fn table_header_style() -> Style {
-    Style::default()
-        .fg(Color::DarkGray)
-        .add_modifier(Modifier::BOLD)
-}
-
-/// 为模型分配确定性颜色（同一模型在柱状图、Overview 与 Day 明细中保持同色）。
-pub fn model_color(model: &str) -> Color {
-    if model.contains("deepseek") {
-        return Color::Cyan;
-    }
-    if model.contains("neon") {
-        return Color::Magenta;
-    }
-    if model.contains("hydrogen") {
-        return Color::Green;
-    }
-    if model.contains("glm") {
-        return Color::Yellow;
-    }
-    if model.contains("argon") || model.contains("carbon") {
-        return Color::Blue;
-    }
-    let mut hash: usize = 0;
-    for b in model.bytes() {
-        hash = hash.wrapping_mul(31).wrapping_add(usize::from(b));
-    }
-    MODEL_PALETTE[hash % MODEL_PALETTE.len()]
-}
-
-pub fn spinner_frame(tick: usize) -> &'static str {
-    SPINNER_FRAMES[tick % SPINNER_FRAMES.len()]
-}
-
-/// 千分位逗号整数格式化（如 `138,557,002`）。
-pub fn format_int(n: u64) -> String {
-    let raw = n.to_string();
-    let len = raw.len();
-    let mut out = String::with_capacity(len + len / 3);
-    for (idx, ch) in raw.chars().enumerate() {
-        if idx > 0 && (len - idx).is_multiple_of(3) {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// 统一按百万单位 `M` 格式化 token（保留 3 位小数，精确到 1k），
-/// 确保 `In / Out / Cache / Tokens` 全部同量纲且小数点垂直对齐。
-pub fn format_tokens_m(n: u64) -> String {
-    if n == 0 {
-        return "—".to_string();
-    }
-    if n < 500 {
-        return "<0.001M".to_string();
-    }
-    format!("{:.3}M", n as f64 / 1_000_000.0)
-}
-
-/// 将柱状图最大值向上取整为 1 位有效数字的整数（如 `195M → 200M`、`42M → 50M`、`320k → 400k`）。
-pub fn nice_axis_ceil(raw: u64) -> u64 {
-    if raw == 0 {
-        return 0;
-    }
-    let mut pow10 = 1u64;
-    while pow10 <= raw / 10 {
-        pow10 *= 10;
-    }
-    let lead = raw.div_ceil(pow10);
-    lead.saturating_mul(pow10)
-}
-
-/// 紧凑整数格式化（用于柱状图 Y 轴 1 位有效数字整刻度，如 `200M`、`50M`、`400k`、`1B`）。
-pub fn format_axis_tokens(n: u64) -> String {
-    if n >= 1_000_000_000 {
-        format!("{}B", n / 1_000_000_000)
-    } else if n >= 1_000_000 {
-        format!("{}M", n / 1_000_000)
-    } else if n >= 1_000 {
-        format!("{}k", n / 1_000)
-    } else {
-        n.to_string()
-    }
-}
-
-pub fn format_cost(usd: f64) -> String {
-    format!("${:.3}", usd)
-}
-
-pub fn format_cache(pct: Option<f64>) -> String {
-    match pct {
-        Some(v) => format!("{:.1}%", v),
-        None => "—".to_string(),
-    }
-}
-
-pub fn format_ttft(secs: Option<f64>) -> String {
-    match secs {
-        Some(v) => format!("{:.1}s", v),
-        None => "—".to_string(),
-    }
-}
-
-pub fn format_speed(tps: Option<f64>) -> String {
-    match tps {
-        Some(v) => format!("{}/s", v.round() as u64),
-        None => "—".to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -621,9 +404,10 @@ mod tests {
     use token_counter::report::aggregate::BucketRow;
     use token_counter::report::session::{SessionDetail, SessionSummary, TurnSummary};
 
+    use super::style::{format_axis_tokens, nice_axis_ceil};
     use super::*;
     use crate::tui::app::{ChartMode, KeyAction};
-    use crate::tui::data::{ModelRow, PeriodData, SessionItem, TuiSnapshot, ViewSnapshot};
+    use crate::tui::data::{ModelRow, PeriodData, TuiSnapshot, ViewSnapshot};
 
     fn empty_view() -> ViewSnapshot {
         ViewSnapshot {
@@ -688,51 +472,49 @@ mod tests {
             }
         };
 
-        let dsh_session = SessionItem {
-            agent: Agent::Dsh,
-            detail: SessionDetail {
-                summary: SessionSummary {
-                    session_id: "019ab3c4-demo-session".to_string(),
-                    label: Some("token-counter".to_string()),
-                    first_ts_ms: 1_763_949_600_000,
-                    last_ts_ms: 1_763_950_200_000,
-                    models: vec!["deepseek-v4.1-flash".to_string()],
-                    turns: 1,
-                    steps: 3,
-                    aborted_steps: 0,
-                    peak_ctx: 162_000,
-                    input: 100_000,
-                    output: 20_000,
-                    reasoning: 0,
-                    cache_read: 500_000,
-                    cache_write: 0,
-                    cost_usd: 0.42,
-                    ttft_sum_ms: 3_000,
-                    ttft_count: 2,
-                    gen_ms: 1_000,
-                    speed_tokens: 110,
-                },
-                turns: vec![TurnSummary {
-                    index: 1,
-                    turn_id: "1".to_string(),
-                    first_ts_ms: 1_763_949_600_000,
-                    last_ts_ms: 1_763_950_200_000,
-                    models: vec!["deepseek-v4.1-flash".to_string()],
-                    steps: 3,
-                    aborted_steps: 0,
-                    peak_ctx: 162_000,
-                    input: 100_000,
-                    output: 20_000,
-                    reasoning: 0,
-                    cache_read: 500_000,
-                    cache_write: 0,
-                    cost_usd: 0.42,
-                    ttft_sum_ms: 3_000,
-                    ttft_count: 2,
-                    gen_ms: 1_000,
-                    speed_tokens: 110,
-                }],
+        let dsh_session = SessionDetail {
+            summary: SessionSummary {
+                agent: Agent::Dsh,
+                session_id: "019ab3c4-demo-session".to_string(),
+                label: Some("token-counter".to_string()),
+                first_ts_ms: 1_763_949_600_000,
+                last_ts_ms: 1_763_950_200_000,
+                models: vec!["deepseek-v4.1-flash".to_string()],
+                turns: 1,
+                steps: 3,
+                aborted_steps: 0,
+                peak_ctx: 162_000,
+                input: 100_000,
+                output: 20_000,
+                reasoning: 0,
+                cache_read: 500_000,
+                cache_write: 0,
+                cost_usd: 0.42,
+                ttft_sum_ms: 3_000,
+                ttft_count: 2,
+                gen_ms: 1_000,
+                speed_tokens: 110,
             },
+            turns: vec![TurnSummary {
+                index: 1,
+                turn_id: "1".to_string(),
+                first_ts_ms: 1_763_949_600_000,
+                last_ts_ms: 1_763_950_200_000,
+                models: vec!["deepseek-v4.1-flash".to_string()],
+                steps: 3,
+                aborted_steps: 0,
+                peak_ctx: 162_000,
+                input: 100_000,
+                output: 20_000,
+                reasoning: 0,
+                cache_read: 500_000,
+                cache_write: 0,
+                cost_usd: 0.42,
+                ttft_sum_ms: 3_000,
+                ttft_count: 2,
+                gen_ms: 1_000,
+                speed_tokens: 110,
+            }],
         };
 
         let dsh_view = ViewSnapshot {

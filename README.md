@@ -78,12 +78,13 @@ token-counter daily -a dsh -n 30
 token-counter weekly -a opencode -n 8
 token-counter monthly -a agy -n 6
 
-# 查询单个 Agent 最近会话列表（-a 必选，默认最近 20 条）
+# 查询最近会话列表（默认合并全部 Agent，默认最近 20 条，可用 -a 筛选单个 Agent）
+token-counter session
 token-counter session -a dsh
 token-counter session -a opencode -n 10
 
-# 按会话 ID 或唯一前缀查看单个会话的 Turn 轮次明细
-token-counter session -a dsh -i 019ab3c4
+# 按会话 ID 或唯一前缀查看单个会话的 Turn 轮次明细（同样支持默认 all 或指定 -a）
+token-counter session -i 019ab3c4
 token-counter session -a agy -i 228ca72a
 
 # 查看帮助

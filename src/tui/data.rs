@@ -49,13 +49,6 @@ pub struct PeriodData {
     pub breakdowns: HashMap<String, Vec<ModelRow>>,
 }
 
-/// 附带所属 Agent 标识的单条会话详情（供 `Session` Tab 在 `All` 与单 Agent 模式下共用）。
-#[derive(Debug, Clone)]
-pub struct SessionItem {
-    pub agent: Agent,
-    pub detail: SessionDetail,
-}
-
 /// 单个筛选视角（`All` 或某个具体 Agent）的完整聚合数据。
 #[derive(Debug, Clone)]
 pub struct ViewSnapshot {
@@ -72,7 +65,7 @@ pub struct ViewSnapshot {
     /// 各 `agent · provider · model` 汇总（按总 token 降序）。
     pub model_rows: Vec<ModelRow>,
     /// 会话与 Turn 明细列表（按最后活跃时间倒序，每个会话内 Turn 按时间升序）。
-    pub sessions: Vec<SessionItem>,
+    pub sessions: Vec<SessionDetail>,
     /// 未知模型列表（`agent · provider · model`）。
     pub unknown_models: Vec<String>,
 }
@@ -136,26 +129,21 @@ pub fn build_snapshot(events: &[UsageEvent], is_partial: bool, load_ms: u64) -> 
     }
 
     let mut by_agent: HashMap<Agent, ViewSnapshot> = HashMap::with_capacity(Agent::ALL.len());
-    let mut all_sessions: Vec<SessionItem> = Vec::new();
+    let mut all_sessions: Vec<SessionDetail> = Vec::new();
 
     for agent in Agent::ALL {
         let agent_events = events_by_agent.get(&agent).map(Vec::as_slice).unwrap_or(&[]);
-        let agent_sessions: Vec<SessionItem> =
-            session::summarize_sessions_with_turns(agent_events, agent)
-                .into_iter()
-                .map(|detail| SessionItem { agent, detail })
-                .collect();
+        let agent_sessions = session::summarize_sessions_with_turns(agent_events, agent);
         all_sessions.extend(agent_sessions.iter().cloned());
         by_agent.insert(agent, build_view_snapshot(agent_events, agent_sessions));
     }
 
     all_sessions.sort_by(|a, b| {
-        b.detail
-            .summary
+        b.summary
             .last_ts_ms
-            .cmp(&a.detail.summary.last_ts_ms)
-            .then_with(|| a.agent.id().cmp(b.agent.id()))
-            .then_with(|| a.detail.summary.session_id.cmp(&b.detail.summary.session_id))
+            .cmp(&a.summary.last_ts_ms)
+            .then_with(|| a.summary.agent.id().cmp(b.summary.agent.id()))
+            .then_with(|| a.summary.session_id.cmp(&b.summary.session_id))
     });
 
     let all = build_view_snapshot(events, all_sessions);
@@ -170,7 +158,7 @@ pub fn build_snapshot(events: &[UsageEvent], is_partial: bool, load_ms: u64) -> 
 }
 
 /// 将一组事件聚合为单个视角的 `ViewSnapshot`。
-fn build_view_snapshot(events: &[UsageEvent], sessions: Vec<SessionItem>) -> ViewSnapshot {
+fn build_view_snapshot(events: &[UsageEvent], sessions: Vec<SessionDetail>) -> ViewSnapshot {
     let daily_report = aggregate::aggregate(events, Granularity::Daily);
     let hourly_report = aggregate::aggregate(events, Granularity::Hourly);
     let weekly_report = aggregate::aggregate(events, Granularity::Weekly);

@@ -9,11 +9,12 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Clear, Row, Table};
 use ratatui::Frame;
+use token_counter::core::format::{format_cost, format_int, format_tokens_m};
 
 use super::models_panel::TABLE_COL_SPACING;
-use super::{
-    centered_rect, format_cost, format_int, format_tokens_m, highlight_style, panel_block,
-    render_scrollbar, table_header_style, table_rows_rect,
+use super::style::{
+    centered_rect, highlight_style, panel_block, render_scrollbar, table_header_style,
+    table_rows_rect,
 };
 use crate::tui::app::{App, TableHit};
 

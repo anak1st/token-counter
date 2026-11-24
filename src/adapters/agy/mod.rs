@@ -10,6 +10,8 @@
 //!   - 活跃库存在非空 `-wal` 时走普通只读以读取未 checkpoint 的增量；
 //!   - 已关闭无 `-wal` 的库走 `file:<path>?immutable=1` 绕过缺少 `-shm` 的打开错误。
 
+mod proto;
+
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -19,19 +21,13 @@ use std::time::UNIX_EPOCH;
 use anyhow::Result;
 use rusqlite::{params, Connection, OpenFlags};
 
+use self::proto::{decode_wire, get_bytes, get_string, get_u64, parse_time_ms};
 use crate::core::model::{Agent, Usage, UsageEvent};
 use crate::core::pricing::{calc_cost_usd, PricingCatalog};
 use crate::core::time::TimeRange;
 
 const STEP_TYPE_PLANNER: i64 = 15;
 const STEP_STATUS_DONE: i64 = 3;
-
-/// 从 protobuf wire 流解码出的单条顶层字段（字节切片零拷贝）。
-struct WireField<'a> {
-    field: u32,
-    varint: Option<u64>,
-    bytes: Option<&'a [u8]>,
-}
 
 /// 解析后的 token 用量子消息。
 #[derive(Debug, Clone, Copy)]
@@ -182,15 +178,13 @@ pub fn scan_conversation(
     let conn = open_conversation_db(db_path)?;
 
     let mut session = fallback_session.to_string();
-    if let Ok(id) = conn.query_row(
+    if let Ok(Some(cascade_id)) = conn.query_row(
         "SELECT cascade_id FROM trajectory_meta LIMIT 1",
         [],
         |row| row.get::<_, Option<String>>(0),
     ) {
-        if let Some(cascade_id) = id {
-            if !cascade_id.is_empty() {
-                session = cascade_id;
-            }
+        if !cascade_id.is_empty() {
+            session = cascade_id;
         }
     }
 
@@ -325,131 +319,6 @@ pub fn scan_conversation(
     }
 
     Ok(events)
-}
-
-/// 顺序扫描 protobuf 二进制流，返回顶层字段列表；遇到异常 wire 类型则中止。
-fn decode_wire(buf: &[u8]) -> Vec<WireField<'_>> {
-    let mut fields = Vec::new();
-    let mut pos = 0usize;
-
-    while pos < buf.len() {
-        let tag = match read_varint(buf, &mut pos) {
-            Some(v) => v,
-            None => break,
-        };
-        let field = (tag >> 3) as u32;
-        let wire = (tag & 7) as u8;
-        if field == 0 {
-            break;
-        }
-
-        match wire {
-            0 => {
-                let val = match read_varint(buf, &mut pos) {
-                    Some(v) => v,
-                    None => break,
-                };
-                fields.push(WireField {
-                    field,
-                    varint: Some(val),
-                    bytes: None,
-                });
-            }
-            1 => {
-                if pos + 8 > buf.len() {
-                    break;
-                }
-                pos += 8;
-            }
-            2 => {
-                let len = match read_varint(buf, &mut pos) {
-                    Some(v) => v as usize,
-                    None => break,
-                };
-                if pos.saturating_add(len) > buf.len() {
-                    break;
-                }
-                fields.push(WireField {
-                    field,
-                    varint: None,
-                    bytes: Some(&buf[pos..pos + len]),
-                });
-                pos += len;
-            }
-            5 => {
-                if pos + 4 > buf.len() {
-                    break;
-                }
-                pos += 4;
-            }
-            _ => break,
-        }
-    }
-
-    fields
-}
-
-/// 读取一个无符号 base-128 varint 并推进游标 `pos`。
-fn read_varint(buf: &[u8], pos: &mut usize) -> Option<u64> {
-    let mut val = 0u64;
-    let mut shift = 0u32;
-
-    while *pos < buf.len() && shift < 64 {
-        let b = buf[*pos];
-        *pos += 1;
-        val |= u64::from(b & 0x7f) << shift;
-        if (b & 0x80) == 0 {
-            return Some(val);
-        }
-        shift += 7;
-    }
-
-    None
-}
-
-fn get_bytes<'a>(fields: &[WireField<'a>], num: u32) -> Option<&'a [u8]> {
-    for item in fields {
-        if item.field == num {
-            if let Some(bytes) = item.bytes {
-                return Some(bytes);
-            }
-        }
-    }
-    None
-}
-
-fn get_string(fields: &[WireField<'_>], num: u32) -> Option<String> {
-    let bytes = get_bytes(fields, num)?;
-    Some(String::from_utf8_lossy(bytes).into_owned())
-}
-
-fn get_u64(fields: &[WireField<'_>], num: u32) -> Option<u64> {
-    for item in fields {
-        if item.field == num {
-            if let Some(v) = item.varint {
-                return Some(v);
-            }
-        }
-    }
-    None
-}
-
-/// 解码 protobuf Timestamp / Duration（`f1 = seconds`, `f2 = nanos`）为毫秒；
-/// 遇到空子消息返回 `None`，避免把缺失的 TTFT 错计为 0ms。
-fn parse_time_ms(bytes: Option<&[u8]>) -> Option<i64> {
-    let bytes = bytes?;
-    if bytes.is_empty() {
-        return None;
-    }
-    let fields = decode_wire(bytes);
-    let secs_opt = get_u64(&fields, 1);
-    let nanos_opt = get_u64(&fields, 2);
-    if secs_opt.is_none() && nanos_opt.is_none() {
-        return None;
-    }
-    let seconds = secs_opt.unwrap_or(0) as i64;
-    let nanos = nanos_opt.unwrap_or(0) as i64;
-    Some(seconds.saturating_mul(1000) + (nanos + 500_000) / 1_000_000)
 }
 
 /// 解码 usage 子消息（`f2=未命中输入`, `f3=总输出`, `f5=缓存命中`, `f9=思考`, `f10=非思考输出`）。

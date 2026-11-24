@@ -9,10 +9,12 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Cell, Row, Table, TableState};
 use ratatui::Frame;
+use token_counter::core::format::{
+    format_cost, format_int, format_percent, format_speed, format_tokens_m, format_ttft,
+};
 use token_counter::report::aggregate::BucketRow;
 
-use super::{
-    format_cache, format_cost, format_int, format_speed, format_tokens_m, format_ttft,
+use super::style::{
     highlight_style, model_color, panel_block, render_scrollbar, table_header_style,
     table_rows_rect,
 };
@@ -99,7 +101,7 @@ pub fn metrics_table_row<'a>(first_cell: Cell<'a>, m: &BucketRow, wide: bool) ->
             Cell::from(Line::from(format_tokens_m(out_total)).right_aligned()),
             Cell::from(Line::from(format_tokens_m(m.cache_tokens())).right_aligned()),
             Cell::from(Line::from(format_tokens_m(m.total_tokens())).right_aligned()),
-            Cell::from(Line::from(format_cache(m.cache_percent())).right_aligned()),
+            Cell::from(Line::from(format_percent(m.cache_percent())).right_aligned()),
             cost_cell,
             Cell::from(Line::from(format_ttft(m.avg_ttft_secs())).right_aligned()),
             speed_cell,
@@ -109,7 +111,7 @@ pub fn metrics_table_row<'a>(first_cell: Cell<'a>, m: &BucketRow, wide: bool) ->
             first_cell,
             Cell::from(Line::from(format_int(m.requests)).right_aligned()),
             Cell::from(Line::from(format_tokens_m(m.total_tokens())).right_aligned()),
-            Cell::from(Line::from(format_cache(m.cache_percent())).right_aligned()),
+            Cell::from(Line::from(format_percent(m.cache_percent())).right_aligned()),
             cost_cell,
             Cell::from(Line::from(format_ttft(m.avg_ttft_secs())).right_aligned()),
             speed_cell,

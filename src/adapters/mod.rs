@@ -7,6 +7,8 @@ pub mod agy;
 pub mod dsh;
 pub mod opencode;
 
+use std::thread;
+
 use anyhow::Result;
 
 use crate::core::model::{Agent, UsageEvent};
@@ -47,17 +49,49 @@ pub fn scan_agent(
     }
 }
 
-/// 按时间范围扫描多个 Agent 并合并结果。
+/// 按统一查询协议并行扫描多个 Agent 并按输入顺序合并结果。
+///
+/// 仅查询单个 Agent 时直接原地执行；多 Agent 时通过 `std::thread::scope` 并发扫描，
+/// 使总耗时由最慢的单个数据源决定，面向未来多 Agent 扩展保持低延迟。
+pub fn scan_agents_query(
+    agents: &[Agent],
+    query: &ScanQuery,
+    catalog: &PricingCatalog,
+) -> Result<Vec<UsageEvent>> {
+    if agents.len() <= 1 {
+        let mut events = Vec::new();
+        for &agent in agents {
+            let mut part = scan_agent(agent, query, catalog)?;
+            events.append(&mut part);
+        }
+        return Ok(events);
+    }
+
+    let results: Vec<Result<Vec<UsageEvent>>> = thread::scope(|scope| {
+        let handles: Vec<_> = agents
+            .iter()
+            .map(|&agent| scope.spawn(move || scan_agent(agent, query, catalog)))
+            .collect();
+
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("agent scan thread panicked"))
+            .collect()
+    });
+
+    let mut events = Vec::new();
+    for res in results {
+        let mut part = res?;
+        events.append(&mut part);
+    }
+    Ok(events)
+}
+
+/// 按时间范围并行扫描多个 Agent 并合并结果。
 pub fn scan_agents(
     agents: &[Agent],
     range: TimeRange,
     catalog: &PricingCatalog,
 ) -> Result<Vec<UsageEvent>> {
-    let query = ScanQuery::Range(range);
-    let mut events = Vec::new();
-    for &agent in agents {
-        let mut part = scan_agent(agent, &query, catalog)?;
-        events.append(&mut part);
-    }
-    Ok(events)
+    scan_agents_query(agents, &ScanQuery::Range(range), catalog)
 }

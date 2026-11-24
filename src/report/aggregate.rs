@@ -162,13 +162,15 @@ pub struct Report {
     pub unknown_models: Vec<String>,
 }
 
+/// 分组聚合键：`(agent_id, provider, model)`。
+type GroupKey = (&'static str, String, String);
+/// 单个模型分组的累加状态：`(Agent, 价目快照, 按时间桶聚合映射)`。
+type GroupAcc = (Agent, ModelPricing, BTreeMap<String, BucketRow>);
+
 /// 将归一化事件列表聚合为总计表、有价分组表与未知模型列表。
 pub fn aggregate(events: &[UsageEvent], granularity: Granularity) -> Report {
     // 按 (agent_id, provider, model) 字典序分组，确保输出顺序稳定
-    let mut grouped: BTreeMap<
-        (&'static str, String, String),
-        (Agent, ModelPricing, BTreeMap<String, BucketRow>),
-    > = BTreeMap::new();
+    let mut grouped: BTreeMap<GroupKey, GroupAcc> = BTreeMap::new();
     let mut unknown_set: BTreeSet<String> = BTreeSet::new();
 
     for event in events {

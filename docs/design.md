@@ -34,25 +34,33 @@ src/
 ├── core/
 │   ├── model.rs              # Agent 枚举、Usage 与归一化 UsageEvent
 │   ├── pricing.rs            # config/models.json 加载、全小写校验、USD 计价
-│   └── time.rs               # jiff 本地时区时间窗与 Hour/Day/Week/Month 分桶
+│   ├── time.rs               # jiff 本地时区时间窗与 Hour/Day/Week/Month 分桶
+│   └── format.rs             # CLI 与 TUI 共用的数值、费用、耗时与 CJK 截断格式化
 ├── adapters/
-│   ├── mod.rs                # ScanQuery（Range / RecentSessions / SessionPrefix）
+│   ├── mod.rs                # ScanQuery 与 std::thread::scope 多 Agent 并行分发
 │   ├── opencode.rs           # opencode SQLite 只读解析与 Turn 切分
 │   ├── dsh.rs                # dsh v4 三层并行解析（字节预筛 + 类型化 + thread::scope）
-│   └── agy.rs                # agy SQLite（WAL / immutable）+ 零依赖 Protobuf 解码
+│   └── agy/
+│       ├── mod.rs            # agy SQLite（WAL / immutable）与事件映射
+│       └── proto.rs          # 零依赖 Protobuf wire 解码器
 ├── report/
 │   ├── aggregate.rs          # 按 (agent, provider, model, bucket) 聚合
-│   ├── render.rs             # 纯空格对齐单次报表（无边框、无 ANSI 颜色）
-│   └── session.rs            # 会话列表、前缀匹配与 Turn 级聚合
+│   ├── render.rs             # 纯空格对齐时间维度报表（无边框、无 ANSI 颜色）
+│   └── session/
+│       ├── mod.rs            # 会话列表、跨 Agent 前缀匹配与 Turn 级聚合（CLI/TUI 共用）
+│       └── render.rs         # 单次 CLI 会话列表与 Turn 明细纯文本渲染
 ├── cli/
-│   ├── mod.rs                # Clap 子命令定义（全英文 help）
+│   ├── mod.rs                # Clap 子命令定义（全英文 help，统一 AgentArg 默认 all）
 │   └── spinner.rs            # 零依赖 TTY 读秒加载动画（完成后同行覆盖）
 └── tui/
-    ├── mod.rs                # 终端生命周期与两段式 60s 后台刷新线程
-    ├── app.rs                # 6 个 Tab 状态、各表独立滚动与快捷键分发
-    ├── data.rs               # TuiSnapshot 快照构建（PeriodData / ChartDay / Sessions）
+    ├── mod.rs                # 终端生命周期（含鼠标捕获）与梯度 60s 后台刷新线程
+    ├── data.rs               # TuiSnapshot 多视角预聚合（All + 按 Agent）
+    ├── app/
+    │   ├── mod.rs            # 6 个 Tab 状态、全局筛选、双表焦点与滚动裁剪
+    │   └── input.rs          # 键盘与鼠标点击/悬停滚轮事件分发
     └── ui/
-        ├── mod.rs            # 三段式布局、顶部框内 Agent 按钮、底栏未知模型入口与公共辅助
+        ├── mod.rs            # 三段式顶层布局、顶栏框内 Agent 按钮与底栏状态
+        ├── style.rs          # 圆角边框、聚焦高亮、模型配色、滚动条与 1 位有效数字 Y 轴
         ├── agent_picker.rs   # 可滚动居中 Agent 筛选弹窗（含 All 与各 Agent 汇总）
         ├── unknown_modal.rs  # 精简未知模型弹窗（列出未命中价目表的 agent · provider · model）
         ├── overview.rs       # 全量 KPI + 自适应宽度 Days/Hours 堆叠柱状图 + 全量 Models 面板
@@ -112,5 +120,5 @@ TUI 坚持**零磁盘缓存**，同时通过内存梯度加载兼顾首屏速度
 1. 先调研目标 Agent 的本地存储路径、字段含义与去重口径，编写 `docs/<source>.md`；
 2. 在 `src/core/model.rs` 的 `Agent` 枚举中新增成员（TUI 的 `Session` 切换按钮与全量扫描会自动感知）；
 3. 在 `src/adapters/<source>.rs` 实现只读扫描器并在 `src/adapters/mod.rs` 注册；
-4. 在 `src/cli/mod.rs` 的 `AgentArg` / `SingleAgentArg` 补上 CLI 参数值；
+4. 在 `src/cli/mod.rs` 的 `AgentArg` 补上 CLI 参数值（所有子命令共用）；
 5. 如有新模型，在 `config/models.json` 中补充全小写定价条目与别名。

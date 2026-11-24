@@ -1,8 +1,8 @@
 //! 命令行参数定义。
 //!
 //! - `token-counter` / `token-counter tui`：进入交互式 TUI（不接收额外参数）
-//! - `hourly` / `daily` / `weekly` / `monthly`：单次报表，共用 `-a/--agent` 与 `-n`
-//! - `session`：会话列表与单会话 Turn 详情，强制通过 `-a` 指定单个具体 Agent，用 `-i` 指定会话 ID 前缀
+//! - `hourly` / `daily` / `weekly` / `monthly`：单次报表，共用 `-a/--agent`（默认 `all`）与 `-n`
+//! - `session`：会话列表与单会话 Turn 详情，同样支持 `-a/--agent`（默认 `all`），用 `-i` 指定会话 ID 前缀
 //!
 //! 注意：`clap` 帮助文案通过显式英文 `about`/`help` 属性提供，保证终端输出全英文。
 
@@ -66,11 +66,17 @@ pub struct ReportArgs {
     pub last: Option<u32>,
 }
 
-// `session` 子命令参数：强制指定单个 Agent，可选 `-i` 查看单会话 Turn 列表或 `-n` 限制列表条数
+// `session` 子命令参数：与时间维度报表共用 `-a`（默认 `all`），可选 `-i` 查单会话 Turn 或 `-n` 限条数
 #[derive(Debug, Args)]
 pub struct SessionArgs {
-    #[arg(short = 'a', long, value_enum, help = "Target agent (required)")]
-    pub agent: SingleAgentArg,
+    #[arg(
+        short = 'a',
+        long,
+        value_enum,
+        default_value_t = AgentArg::All,
+        help = "Agent to query"
+    )]
+    pub agent: AgentArg,
 
     #[arg(
         short = 'i',
@@ -89,7 +95,7 @@ pub struct SessionArgs {
     pub last: Option<usize>,
 }
 
-// 时间报表 `-a / --agent` 允许的取值（支持 all）
+// 所有单次 CLI 子命令共用的 `-a / --agent` 取值（统一支持 all 与具体 Agent）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum AgentArg {
     All,
@@ -106,25 +112,6 @@ impl AgentArg {
             AgentArg::Opencode => vec![Agent::Opencode],
             AgentArg::Dsh => vec![Agent::Dsh],
             AgentArg::Agy => vec![Agent::Agy],
-        }
-    }
-}
-
-// `session` 命令专用的单 Agent 取值（不允许 all）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum SingleAgentArg {
-    Opencode,
-    Dsh,
-    Agy,
-}
-
-impl SingleAgentArg {
-    /// 转换为领域层 `Agent` 枚举。
-    pub fn into_agent(self) -> Agent {
-        match self {
-            SingleAgentArg::Opencode => Agent::Opencode,
-            SingleAgentArg::Dsh => Agent::Dsh,
-            SingleAgentArg::Agy => Agent::Agy,
         }
     }
 }
@@ -162,16 +149,23 @@ mod tests {
     }
 
     #[test]
-    fn parses_session_command_and_enforces_single_agent() {
-        // 缺少 -a 或传 all 必须拒绝
-        assert!(Cli::try_parse_from(["token-counter", "session"]).is_err());
-        assert!(Cli::try_parse_from(["token-counter", "session", "-a", "all"]).is_err());
+    fn parses_session_command_with_default_all_and_specific_agent() {
+        // 默认 `-a all`
+        let default_list = Cli::try_parse_from(["token-counter", "session"]).unwrap();
+        match default_list.command {
+            Some(Command::Session(args)) => {
+                assert_eq!(args.agent, AgentArg::All);
+                assert_eq!(args.id, None);
+                assert_eq!(args.last, None);
+            }
+            other => panic!("expected Session, got {:?}", other),
+        }
 
         let list = Cli::try_parse_from(["token-counter", "session", "-a", "dsh", "-n", "10"])
             .unwrap();
         match list.command {
             Some(Command::Session(args)) => {
-                assert_eq!(args.agent, SingleAgentArg::Dsh);
+                assert_eq!(args.agent, AgentArg::Dsh);
                 assert_eq!(args.id, None);
                 assert_eq!(args.last, Some(10));
             }
@@ -183,11 +177,14 @@ mod tests {
                 .unwrap();
         match detail.command {
             Some(Command::Session(args)) => {
-                assert_eq!(args.agent, SingleAgentArg::Agy);
+                assert_eq!(args.agent, AgentArg::Agy);
                 assert_eq!(args.id.as_deref(), Some("228ca72a"));
                 assert_eq!(args.last, None);
             }
             other => panic!("expected Session, got {:?}", other),
         }
+
+        // `-i` 与 `-n` 互斥
+        assert!(Cli::try_parse_from(["token-counter", "session", "-i", "abc", "-n", "5"]).is_err());
     }
 }
