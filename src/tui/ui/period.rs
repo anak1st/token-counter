@@ -1,21 +1,22 @@
 //! 通用时间维度 Tab 视图（共用一套上下联动双表渲染 `Hour` / `Day` / `Week` / `Month`）。
 //!
 //! 上半区 60%：按时间倒序的滚动主表（最新在最上面）；
-//! 下半区 40%：当前选中时间分桶的统一 `Models` 面板（按 token 降序，右侧列与上表严格垂直对齐）。
+//! 下半区 40%：当前选中时间分桶的统一 `Models` 面板（支持 `Tab` 切焦点与鼠标点击/滚轮滚动）。
 
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::widgets::{
-    Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
-};
+use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
 use super::models_panel::{
     self, metrics_table_header, metrics_table_row, metrics_table_widths, TABLE_COL_SPACING,
     WIDE_TABLE_THRESHOLD,
 };
-use super::{highlight_style, split_upper_and_models, styled_block};
-use crate::tui::app::App;
+use super::{
+    panel_block, render_scrollbar, split_upper_and_models, styled_block, table_rows_rect,
+    upper_highlight_style,
+};
+use crate::tui::app::{App, FocusPane, TableHit};
 use crate::tui::data::PeriodData;
 
 /// 单个时间维度 Tab 的展示文案配置。
@@ -28,14 +29,16 @@ pub struct PeriodViewSpec {
     pub first_col: &'static str,
 }
 
-/// 渲染任意时间维度 Tab（`Hour` / `Day` / `Week` / `Month`）。
+/// 渲染任意时间维度 Tab（`Hour` / `Day` / `Week` / `Month`），返回 `(上表热区, 下表热区)`。
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     spec: PeriodViewSpec,
     period: &PeriodData,
     table_state: &mut TableState,
-) {
+    detail_table: &mut TableState,
+    focus: FocusPane,
+) -> (Option<TableHit>, Option<TableHit>) {
     if period.rows.is_empty() {
         let block = styled_block(spec.panel_name);
         let inner = block.inner(area);
@@ -44,29 +47,46 @@ pub fn render(
             Paragraph::new("No usage data found.").style(Style::default().fg(Color::DarkGray)),
             inner,
         );
-        return;
+        return (None, None);
     }
 
     let (upper_area, models_area) = split_upper_and_models(area);
 
-    render_period_table(frame, upper_area, &spec, period, table_state);
+    let upper_hit = render_period_table(
+        frame,
+        upper_area,
+        &spec,
+        period,
+        table_state,
+        focus == FocusPane::Upper,
+    );
 
-    if let Some((bucket_label, items)) = App::selected_period_breakdown(period, table_state) {
-        let title = format!("Models · {} (by tokens)", bucket_label);
-        models_panel::render(frame, models_area, &title, items, None);
-    }
+    let lower_hit = App::selected_period_breakdown(period, table_state).map(|(label, items)| {
+        let title = format!("Models · {} (by tokens)", label);
+        models_panel::render(
+            frame,
+            models_area,
+            &title,
+            items,
+            detail_table,
+            focus == FocusPane::Lower,
+        )
+    });
+
+    (Some(upper_hit), lower_hit)
 }
 
-/// 上半区：时间倒序主表（支持 ↑/↓ 滚动选中）。
+/// 上半区：时间倒序主表（聚焦时亮白框 + 青色高亮行，失焦时暗灰框保留选中行指示）。
 fn render_period_table(
     frame: &mut Frame,
     area: Rect,
     spec: &PeriodViewSpec,
     period: &PeriodData,
     table_state: &mut TableState,
-) {
+    focused: bool,
+) -> TableHit {
     let title = format!("{} ({} {})", spec.panel_name, period.rows.len(), spec.unit_name);
-    let block = styled_block(&title);
+    let block = panel_block(&title, focused);
     let inner = block.inner(area);
     let wide = area.width >= WIDE_TABLE_THRESHOLD;
 
@@ -82,17 +102,13 @@ fn render_period_table(
         .header(header)
         .block(block)
         .column_spacing(TABLE_COL_SPACING)
-        .row_highlight_style(highlight_style());
+        .row_highlight_style(upper_highlight_style(focused));
 
     frame.render_stateful_widget(table, area, table_state);
+    render_scrollbar(frame, area, inner, period.rows.len(), table_state.selected());
 
-    if period.rows.len() > inner.height.saturating_sub(1) as usize {
-        let selected = table_state.selected().unwrap_or(0);
-        let mut sb_state = ScrollbarState::new(period.rows.len()).position(selected);
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            area,
-            &mut sb_state,
-        );
+    TableHit {
+        panel: area,
+        rows: Some(table_rows_rect(inner)),
     }
 }

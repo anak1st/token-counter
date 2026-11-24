@@ -52,11 +52,12 @@ src/
     ├── app.rs                # 6 个 Tab 状态、各表独立滚动与快捷键分发
     ├── data.rs               # TuiSnapshot 快照构建（PeriodData / ChartDay / Sessions）
     └── ui/
-        ├── mod.rs            # 三段式布局、60%/40% 统一高度与公共格式化
+        ├── mod.rs            # 三段式布局、顶部 Agent 筛选徽章、60%/40% 统一高度
+        ├── agent_picker.rs   # 可滚动居中 Agent 筛选弹窗（含 All 与各 Agent 汇总）
         ├── overview.rs       # KPI 条 + 30 天堆叠柱状图 + 全量 Models 面板
         ├── period.rs         # Hour / Day / Week / Month 通用上下联动双表
         ├── models_panel.rs   # 统一 Models 面板与跨表共享的右侧数值列宽
-        └── session.rs        # Agent 切换按钮栏 + Sessions 列表 + Turns 明细
+        └── session.rs        # 当前 Agent 会话列表 + 逐个 Turns 明细
 ```
 
 ## 2. 归一化事件与指标口径

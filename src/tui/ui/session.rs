@@ -1,124 +1,88 @@
-//! `Session` Tab 视图：顶部 Agent 切换按钮栏 + 上半区会话列表 + 下半区逐个 Turn 明细。
+//! `Session` Tab 视图：上半区会话列表 + 下半区逐个 Turn 明细。
 //!
-//! 布局与 `Hour` / `Day` / `Week` / `Month` 严格保持一致（60% / 40% 纵向划分）：
-//! - 上半区顶部 1 行为可扩展的 Agent 按钮切换栏（`a` 循环或 `1-N` 直达）；
-//! - 上半区主体为当前 Agent 的会话列表（按最后活跃时间倒序）；
-//! - 下半区为当前选中会话的逐个 Turn 明细（按时间升序，`Enter` 可切换焦点滚动）。
+//! 布局、边框样式与全局筛选均与 `Hour` / `Day` / `Week` / `Month` 严格保持一致：
+//! - 共用全局 `agent_filter`（支持 `All` 与任意单个 Agent）；
+//! - 上半区 60% 为按最后活跃时间倒序排列的会话列表；
+//! - 下半区 40% 为当前选中会话的逐个 Turn 明细（按时间升序，`Enter` 可切换焦点滚动）。
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
-};
+use ratatui::widgets::{Cell, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
-use token_counter::core::model::Agent;
 use token_counter::core::time::format_datetime;
-use token_counter::report::session::{SessionDetail, TurnSummary};
+use token_counter::report::session::TurnSummary;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::models_panel::TABLE_COL_SPACING;
 use super::{
     format_cache, format_cost, format_speed, format_tokens_m, format_ttft, highlight_style,
-    model_color, split_upper_and_models, styled_block, table_header_style,
+    model_color, panel_block, render_scrollbar, split_upper_and_models, styled_block,
+    table_header_style, table_rows_rect, upper_highlight_style,
 };
-use crate::tui::app::{App, SessionFocus};
+use crate::tui::app::{FocusPane, TableHit};
+use crate::tui::data::SessionItem;
 
 /// 展开完整列（含 `PeakCtx / Cache% / TTFT` 与完整年份时间）所需的最小终端宽度。
 const WIDE_SESSION_THRESHOLD: u16 = 126;
 
-/// 渲染 `Session` Tab。
-pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
+/// 渲染 `Session` Tab，返回 `(上表热区, 下表热区)`。
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    sessions: &[SessionItem],
+    show_agent_prefix: bool,
+    session_table: &mut TableState,
+    turn_table: &mut TableState,
+    focus: FocusPane,
+) -> (TableHit, TableHit) {
     let (upper_area, lower_area) = split_upper_and_models(area);
 
-    let upper_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(upper_area);
+    let upper_hit = render_sessions_table(
+        frame,
+        upper_area,
+        sessions,
+        show_agent_prefix,
+        session_table,
+        focus == FocusPane::Upper,
+    );
 
-    render_agent_selector(frame, app, upper_chunks[0]);
-
-    let agent = app.session_agent;
-    let focus = app.session_focus;
-    let sessions: Vec<SessionDetail> = app.sessions_for_agent(agent).to_vec();
-
-    let selected_idx = {
-        let state = app.session_tables.entry(agent).or_default();
-        render_sessions_table(
-            frame,
-            upper_chunks[1],
-            agent,
-            &sessions,
-            state,
-            focus == SessionFocus::Sessions,
-        );
-        state.selected()
-    };
-
-    let selected_detail = selected_idx.and_then(|idx| sessions.get(idx));
-    render_turns_table(
+    let selected_item = session_table.selected().and_then(|idx| sessions.get(idx));
+    let lower_hit = render_turns_table(
         frame,
         lower_area,
-        selected_detail,
-        &mut app.turn_table,
-        focus == SessionFocus::Turns,
+        selected_item,
+        show_agent_prefix,
+        turn_table,
+        focus == FocusPane::Lower,
     );
+
+    (upper_hit, lower_hit)
 }
 
-/// 顶部单行 Agent 切换按钮栏（随 `Agent::ALL` 自动扩展）。
-fn render_agent_selector(frame: &mut Frame, app: &App, area: Rect) {
-    let mut spans: Vec<Span> = Vec::new();
-    spans.push(Span::styled(
-        " Agent  ",
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD),
-    ));
-
-    for (idx, &agent) in Agent::ALL.iter().enumerate() {
-        let count = app.sessions_for_agent(agent).len();
-        let label = format!(" {}:{} ({}) ", idx + 1, agent.id(), count);
-        let style = if agent == app.session_agent {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-        } else {
-            Style::default().fg(Color::Gray)
-        };
-        spans.push(Span::styled(label, style));
-        spans.push(Span::raw(" "));
-    }
-
-    let hint = format!(" a / 1-{} switch", Agent::ALL.len());
-    spans.push(Span::styled(hint, Style::default().fg(Color::DarkGray)));
-
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
-/// 上半区：当前选中 Agent 的会话列表（按最后活跃时间倒序）。
+/// 上半区：会话列表（按最后活跃时间倒序）。
 fn render_sessions_table(
     frame: &mut Frame,
     area: Rect,
-    agent: Agent,
-    sessions: &[SessionDetail],
+    sessions: &[SessionItem],
+    show_agent_prefix: bool,
     table_state: &mut TableState,
     focused: bool,
-) {
-    let title = format!("Sessions · {} ({})", agent.id(), sessions.len());
-    let mut block = styled_block(&title);
-    if focused {
-        block = block.border_style(Style::default().fg(Color::Cyan));
-    }
+) -> TableHit {
+    let title = format!("Sessions ({})", sessions.len());
+    let block = panel_block(&title, focused);
 
     if sessions.is_empty() {
         let inner = block.inner(area);
         frame.render_widget(block, area);
         frame.render_widget(
-            Paragraph::new(format!("No sessions found for {}.", agent.id()))
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("No sessions found.").style(Style::default().fg(Color::DarkGray)),
             inner,
         );
-        return;
+        return TableHit {
+            panel: area,
+            rows: None,
+        };
     }
 
     let inner = block.inner(area);
@@ -128,12 +92,22 @@ fn render_sessions_table(
     let model_budget = if wide { 16 } else { 14 };
 
     let mut rows: Vec<Row> = Vec::with_capacity(sessions.len());
-    for detail in sessions {
-        let s = &detail.summary;
-        let session_text = match s.label.as_deref() {
+    for item in sessions {
+        let s = &item.detail.summary;
+        let id_and_label = match s.label.as_deref() {
             Some(label) => format!("{} · {}", short_id(&s.session_id, 8), label),
             None => short_id(&s.session_id, 12),
         };
+        let session_cell = if show_agent_prefix {
+            Cell::from(Line::from(vec![
+                Span::styled(item.agent.id(), Style::default().fg(Color::DarkGray)),
+                Span::styled(" · ", Style::default().fg(Color::DarkGray)),
+                Span::raw(id_and_label),
+            ]))
+        } else {
+            Cell::from(id_and_label)
+        };
+
         let time_text = format_table_time(s.last_ts_ms, wide);
         let model_cell = format_model_cell(&s.models, model_budget);
         let cost_cell = Cell::from(Line::from(format_cost(s.cost_usd)).right_aligned())
@@ -143,7 +117,7 @@ fn render_sessions_table(
 
         if wide {
             rows.push(Row::new([
-                Cell::from(session_text),
+                session_cell,
                 Cell::from(time_text).style(Style::default().fg(Color::DarkGray)),
                 model_cell,
                 Cell::from(Line::from(s.turns.to_string()).right_aligned()),
@@ -157,7 +131,7 @@ fn render_sessions_table(
             ]));
         } else {
             rows.push(Row::new([
-                Cell::from(session_text),
+                session_cell,
                 Cell::from(time_text).style(Style::default().fg(Color::DarkGray)),
                 model_cell,
                 Cell::from(Line::from(s.turns.to_string()).right_aligned()),
@@ -173,18 +147,14 @@ fn render_sessions_table(
         .header(header)
         .block(block)
         .column_spacing(TABLE_COL_SPACING)
-        .row_highlight_style(highlight_style());
+        .row_highlight_style(upper_highlight_style(focused));
 
     frame.render_stateful_widget(table, area, table_state);
+    render_scrollbar(frame, area, inner, sessions.len(), table_state.selected());
 
-    if sessions.len() > inner.height.saturating_sub(1) as usize {
-        let selected = table_state.selected().unwrap_or(0);
-        let mut sb_state = ScrollbarState::new(sessions.len()).position(selected);
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            area,
-            &mut sb_state,
-        );
+    TableHit {
+        panel: area,
+        rows: Some(table_rows_rect(inner)),
     }
 }
 
@@ -192,12 +162,13 @@ fn render_sessions_table(
 fn render_turns_table(
     frame: &mut Frame,
     area: Rect,
-    detail: Option<&SessionDetail>,
+    item: Option<&SessionItem>,
+    show_agent_prefix: bool,
     table_state: &mut TableState,
     focused: bool,
-) {
-    let detail = match detail {
-        Some(d) => d,
+) -> TableHit {
+    let item = match item {
+        Some(it) => it,
         None => {
             let block = styled_block("Turns");
             let inner = block.inner(area);
@@ -207,29 +178,32 @@ fn render_turns_table(
                     .style(Style::default().fg(Color::DarkGray)),
                 inner,
             );
-            return;
+            return TableHit {
+                panel: area,
+                rows: None,
+            };
         }
     };
 
+    let detail = &item.detail;
     let s = &detail.summary;
+    let id_short = short_id(&s.session_id, 12);
+    let prefix = if show_agent_prefix {
+        format!("{} · {}", item.agent.id(), id_short)
+    } else {
+        id_short
+    };
     let title = match s.label.as_deref() {
         Some(label) => format!(
             "Turns · {} · {} ({} turns)",
-            short_id(&s.session_id, 12),
+            prefix,
             truncate_width(label, 36),
             detail.turns.len()
         ),
-        None => format!(
-            "Turns · {} ({} turns)",
-            short_id(&s.session_id, 12),
-            detail.turns.len()
-        ),
+        None => format!("Turns · {} ({} turns)", prefix, detail.turns.len()),
     };
 
-    let mut block = styled_block(&title);
-    if focused {
-        block = block.border_style(Style::default().fg(Color::Cyan));
-    }
+    let block = panel_block(&title, focused);
 
     if detail.turns.is_empty() {
         let inner = block.inner(area);
@@ -238,7 +212,10 @@ fn render_turns_table(
             Paragraph::new("No turns recorded.").style(Style::default().fg(Color::DarkGray)),
             inner,
         );
-        return;
+        return TableHit {
+            panel: area,
+            rows: None,
+        };
     }
 
     let inner = block.inner(area);
@@ -261,25 +238,17 @@ fn render_turns_table(
     }
 
     frame.render_stateful_widget(table, area, table_state);
+    render_scrollbar(frame, area, inner, detail.turns.len(), table_state.selected());
 
-    if detail.turns.len() > inner.height.saturating_sub(1) as usize {
-        let selected = table_state.selected().unwrap_or(0);
-        let mut sb_state = ScrollbarState::new(detail.turns.len()).position(selected);
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight),
-            area,
-            &mut sb_state,
-        );
+    TableHit {
+        panel: area,
+        rows: Some(table_rows_rect(inner)),
     }
 }
 
 /// 构造单条 Turn 明细行。
 fn build_turn_row(turn: &TurnSummary, wide: bool) -> Row<'static> {
-    let turn_cell = if turn.aborted_steps > 0 {
-        Cell::from(format!("#{}*", turn.index)).style(Style::default().fg(Color::Yellow))
-    } else {
-        Cell::from(format!("#{}", turn.index))
-    };
+    let turn_cell = Cell::from(format!("#{}", turn.index));
 
     let time_text = format_table_time(turn.first_ts_ms, wide);
     let model_cell = format_model_cell(&turn.models, 32);
@@ -321,7 +290,7 @@ fn build_turn_row(turn: &TurnSummary, wide: bool) -> Row<'static> {
 fn sessions_widths(wide: bool) -> Vec<Constraint> {
     if wide {
         vec![
-            Constraint::Min(18),   // Session (id · label)
+            Constraint::Min(18),    // Session (id · label)
             Constraint::Length(16), // Time
             Constraint::Length(18), // Model
             Constraint::Length(6),  // Turns
@@ -335,7 +304,7 @@ fn sessions_widths(wide: bool) -> Vec<Constraint> {
         ]
     } else {
         vec![
-            Constraint::Min(14),   // Session
+            Constraint::Min(14),    // Session
             Constraint::Length(11), // Time (MM-DD HH:MM)
             Constraint::Length(16), // Model
             Constraint::Length(5),  // Turns

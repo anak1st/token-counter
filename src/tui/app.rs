@@ -1,18 +1,18 @@
-//! TUI 应用状态与按键交互处理。
+//! TUI 应用状态与键盘 / 鼠标交互处理。
 //!
 //! 支持 `Overview`、`Hour`、`Day`、`Week`、`Month`、`Session` 六个视图：
-//! - 所有时间表与会话列表严格按时间倒序排列（最新在最上面），不做排序操作；
-//! - 每个 Tab（以及 `Session` 下各 Agent）独立维护滚动选中状态，切换不丢失位置。
+//! - 全部六个视图共用同一套 Agent 筛选（支持 `All` 与任意单个 Agent），按 `a` 或点击按钮打开弹窗；
+//! - `←/→/h/l` 切换顶部视图，`Tab` 在上下两个子框之间切换焦点（`Hour`/`Day`/`Week`/`Month`/`Session`）；
+//! - 支持鼠标左键点击（Tab、Agent 按钮、上下框行、弹窗行）与悬停滚轮滚动。
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
 use token_counter::core::model::Agent;
-use token_counter::report::session::SessionDetail;
 
-use super::data::{ModelRow, PeriodData, TuiSnapshot};
+use super::data::{ModelRow, PeriodData, SessionItem, TuiSnapshot, ViewSnapshot};
 
 /// 后台自动刷新周期（60 秒）。
 pub const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
@@ -74,13 +74,40 @@ impl Tab {
             Tab::Session => Tab::Month,
         }
     }
+
+    /// 是否为包含「上表 + 下表」双滚动框的视图。
+    pub fn has_dual_panes(self) -> bool {
+        self != Tab::Overview
+    }
 }
 
-/// `Session` Tab 当前的键盘滚动焦点（上半区会话列表 vs 下半区轮次明细）。
+/// 双表视图当前的键盘滚动焦点（上半主表 vs 下半联动子表）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionFocus {
-    Sessions,
-    Turns,
+pub enum FocusPane {
+    Upper,
+    Lower,
+}
+
+/// 单个可交互表格的外框区域与数据行区域（不含表头）。
+#[derive(Debug, Clone, Copy)]
+pub struct TableHit {
+    pub panel: Rect,
+    pub rows: Option<Rect>,
+}
+
+/// 最近一帧渲染记录的交互热区（供鼠标点击与悬停滚轮精准命中）。
+#[derive(Debug, Default, Clone)]
+pub struct UiLayout {
+    /// 顶部每个 Tab 的可点击矩形区域。
+    pub tab_rects: Vec<(Tab, Rect)>,
+    /// 顶部框内 `Agent: ... [a]` 按钮区域。
+    pub agent_button_rect: Option<Rect>,
+    /// 上半主表热区（`Hour` / `Day` / `Week` / `Month` / `Session`）。
+    pub upper: Option<TableHit>,
+    /// 下半明细表热区（`Overview` 及各双表视图的底部面板）。
+    pub lower: Option<TableHit>,
+    /// Agent 筛选弹窗热区（仅弹窗打开时有效）。
+    pub modal: Option<TableHit>,
 }
 
 /// 按键处理后向主事件循环返回的动作意图。
@@ -99,25 +126,29 @@ pub struct App {
     pub last_error: Option<String>,
     pub last_refresh_at: Option<Instant>,
     pub spinner_tick: usize,
+    /// 全部 6 个视图共用的 Agent 筛选（`None` 表示 `All`）。
+    pub agent_filter: Option<Agent>,
+    /// Agent 选择弹窗是否打开。
+    pub agent_picker_open: bool,
+    /// Agent 选择弹窗内的滚动选中状态。
+    pub agent_picker_table: TableState,
+    /// 双表视图当前聚焦的面板（上表或下表）。
+    pub focus: FocusPane,
     pub overview_table: TableState,
     pub hour_table: TableState,
     pub day_table: TableState,
     pub week_table: TableState,
     pub month_table: TableState,
-    pub session_agent: Agent,
-    pub session_focus: SessionFocus,
-    pub session_tables: HashMap<Agent, TableState>,
-    pub turn_table: TableState,
+    pub session_table: TableState,
+    /// 双表视图下半联动明细表（`Models` 或 `Turns`）共用的滚动状态。
+    pub detail_table: TableState,
+    /// 最近一帧的 UI 热区，供鼠标命中测试使用。
+    pub layout: UiLayout,
 }
 
 impl App {
     /// 创建初始状态（启动即进入后台两段式加载）。
     pub fn new() -> Self {
-        let mut session_tables = HashMap::with_capacity(Agent::ALL.len());
-        for agent in Agent::ALL {
-            session_tables.insert(agent, initial_table_state());
-        }
-
         Self {
             current_tab: Tab::Overview,
             snapshot: None,
@@ -125,15 +156,18 @@ impl App {
             last_error: None,
             last_refresh_at: None,
             spinner_tick: 0,
+            agent_filter: None,
+            agent_picker_open: false,
+            agent_picker_table: initial_table_state(),
+            focus: FocusPane::Upper,
             overview_table: initial_table_state(),
             hour_table: initial_table_state(),
             day_table: initial_table_state(),
             week_table: initial_table_state(),
             month_table: initial_table_state(),
-            session_agent: Agent::ALL[0],
-            session_focus: SessionFocus::Sessions,
-            session_tables,
-            turn_table: initial_table_state(),
+            session_table: initial_table_state(),
+            detail_table: initial_table_state(),
+            layout: UiLayout::default(),
         }
     }
 
@@ -154,24 +188,32 @@ impl App {
         REFRESH_INTERVAL.saturating_sub(elapsed).as_secs()
     }
 
+    /// 返回当前全局筛选条件生效的聚合数据视角。
+    pub fn active_view(&self) -> Option<&ViewSnapshot> {
+        self.snapshot.as_ref().map(|s| s.view(self.agent_filter))
+    }
+
+    /// 返回顶部按钮展示的当前 Agent 标识（`all` 或具体 agent id）。
+    pub fn active_agent_label(&self) -> &'static str {
+        match self.agent_filter {
+            None => "all",
+            Some(agent) => agent.id(),
+        }
+    }
+
+    /// 返回 Agent 选择弹窗中的全部可选项（首项 `None` 表示 `All`，其后依次为所有具体 Agent）。
+    pub fn picker_options(&self) -> Vec<Option<Agent>> {
+        let mut options = Vec::with_capacity(Agent::ALL.len() + 1);
+        options.push(None);
+        for agent in Agent::ALL {
+            options.push(Some(agent));
+        }
+        options
+    }
+
     /// 应用后台线程推送的新快照，并保持各 Tab 选中行在合法范围内。
     pub fn apply_snapshot(&mut self, snapshot: TuiSnapshot) {
-        let overview_len = snapshot.model_rows.len();
-        let hour_len = snapshot.hourly.rows.len();
-        let day_len = snapshot.daily.rows.len();
-        let week_len = snapshot.weekly.rows.len();
-        let month_len = snapshot.monthly.rows.len();
         let still_backfilling = snapshot.is_partial;
-
-        let mut agent_lens: Vec<(Agent, usize)> = Vec::with_capacity(Agent::ALL.len());
-        for agent in Agent::ALL {
-            let count = snapshot
-                .sessions_by_agent
-                .get(&agent)
-                .map(Vec::len)
-                .unwrap_or(0);
-            agent_lens.push((agent, count));
-        }
 
         self.snapshot = Some(snapshot);
         self.refreshing = still_backfilling;
@@ -180,19 +222,7 @@ impl App {
             self.last_refresh_at = Some(Instant::now());
         }
 
-        clamp_selection(&mut self.overview_table, overview_len);
-        clamp_selection(&mut self.hour_table, hour_len);
-        clamp_selection(&mut self.day_table, day_len);
-        clamp_selection(&mut self.week_table, week_len);
-        clamp_selection(&mut self.month_table, month_len);
-
-        for (agent, count) in agent_lens {
-            if let Some(table) = self.session_tables.get_mut(&agent) {
-                clamp_selection(table, count);
-            }
-        }
-
-        self.clamp_turn_selection();
+        self.clamp_all_tables();
     }
 
     /// 记录后台刷新错误（保留上一次成功快照不清空屏幕）。
@@ -217,54 +247,51 @@ impl App {
         Some((row.label.as_str(), breakdown))
     }
 
-    /// 返回指定 Agent 下的全部会话明细切片。
-    pub fn sessions_for_agent(&self, agent: Agent) -> &[SessionDetail] {
-        let snap = match self.snapshot.as_ref() {
-            Some(s) => s,
-            None => return &[],
-        };
-        snap.sessions_by_agent
-            .get(&agent)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
+    /// 返回当前 `Session` Tab 选中的会话条目。
+    pub fn selected_session(&self) -> Option<&SessionItem> {
+        let view = self.active_view()?;
+        let idx = self.session_table.selected()?;
+        view.sessions.get(idx)
     }
 
-    /// 返回当前 `Session` Tab 选中的会话详情。
-    pub fn selected_session(&self) -> Option<&SessionDetail> {
-        let list = self.sessions_for_agent(self.session_agent);
-        let idx = self
-            .session_tables
-            .get(&self.session_agent)
-            .and_then(TableState::selected)?;
-        list.get(idx)
-    }
-
-    /// 切换 `Session` Tab 当前展示的 Agent，并将焦点复位到会话列表。
-    pub fn switch_session_agent(&mut self, agent: Agent) {
-        if self.session_agent == agent {
+    /// 切换顶部 Tab，并将焦点复位到上半主表与明细首行。
+    pub fn switch_tab(&mut self, tab: Tab) {
+        if self.current_tab == tab {
             return;
         }
-        self.session_agent = agent;
-        self.session_focus = SessionFocus::Sessions;
-        self.reset_turn_selection();
+        self.current_tab = tab;
+        self.focus = FocusPane::Upper;
+        self.reset_detail_selection();
     }
 
-    /// 循环切换 `Session` Tab 的 Agent（`forward = true` 向右，`false` 向左）。
-    pub fn cycle_session_agent(&mut self, forward: bool) {
-        let total = Agent::ALL.len();
-        if total == 0 {
-            return;
-        }
-        let current_idx = Agent::ALL
+    /// 打开 Agent 选择弹窗，并默认高亮当前生效的选项。
+    pub fn open_agent_picker(&mut self) {
+        let options = self.picker_options();
+        let selected_idx = options
             .iter()
-            .position(|&a| a == self.session_agent)
+            .position(|&opt| opt == self.agent_filter)
             .unwrap_or(0);
-        let next_idx = if forward {
-            (current_idx + 1) % total
-        } else {
-            (current_idx + total - 1) % total
+        self.agent_picker_table = TableState::default();
+        self.agent_picker_table.select(Some(selected_idx));
+        self.agent_picker_open = true;
+    }
+
+    /// 确认 Agent 弹窗当前选中项并应用到全部 6 个视图。
+    pub fn confirm_agent_picker(&mut self) {
+        let options = self.picker_options();
+        let idx = self.agent_picker_table.selected().unwrap_or(0);
+        self.agent_picker_open = false;
+
+        let choice = match options.get(idx) {
+            Some(&c) => c,
+            None => return,
         };
-        self.switch_session_agent(Agent::ALL[next_idx]);
+
+        if self.agent_filter != choice {
+            self.agent_filter = choice;
+            self.focus = FocusPane::Upper;
+            self.reset_all_tables();
+        }
     }
 
     /// 处理单次键盘事件。
@@ -273,70 +300,62 @@ impl App {
             return KeyAction::Quit;
         }
 
-        // `Session` Tab 专属交互：Agent 按钮切换、Enter 切焦点、Esc 返回上表
-        if self.current_tab == Tab::Session {
-            match key.code {
-                KeyCode::Char('a') => {
-                    self.cycle_session_agent(true);
-                    return KeyAction::None;
-                }
-                KeyCode::Char('A') => {
-                    self.cycle_session_agent(false);
-                    return KeyAction::None;
-                }
-                KeyCode::Char(c) if ('1'..='9').contains(&c) => {
-                    let idx = (c as usize) - ('1' as usize);
-                    if idx < Agent::ALL.len() {
-                        self.switch_session_agent(Agent::ALL[idx]);
-                    }
-                    return KeyAction::None;
-                }
-                KeyCode::Enter => {
-                    self.toggle_session_focus();
-                    return KeyAction::None;
-                }
-                KeyCode::Esc if self.session_focus == SessionFocus::Turns => {
-                    self.session_focus = SessionFocus::Sessions;
-                    return KeyAction::None;
-                }
-                _ => {}
-            }
+        // Agent 选择弹窗打开时独占键盘输入
+        if self.agent_picker_open {
+            self.handle_picker_key(key);
+            return KeyAction::None;
         }
 
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => KeyAction::Quit,
-            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
-                self.current_tab = self.current_tab.next();
+            KeyCode::Char('a') => {
+                self.open_agent_picker();
                 KeyAction::None
             }
-            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
-                self.current_tab = self.current_tab.prev();
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter => {
+                self.toggle_focus_pane();
+                KeyAction::None
+            }
+            KeyCode::Esc => {
+                if self.current_tab.has_dual_panes() && self.focus == FocusPane::Lower {
+                    self.focus = FocusPane::Upper;
+                    KeyAction::None
+                } else {
+                    KeyAction::Quit
+                }
+            }
+            KeyCode::Char('q') => KeyAction::Quit,
+            KeyCode::Right | KeyCode::Char('l') => {
+                self.switch_tab(self.current_tab.next());
+                KeyAction::None
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                self.switch_tab(self.current_tab.prev());
                 KeyAction::None
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.scroll(-1);
+                self.scroll_focused(-1);
                 KeyAction::None
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                self.scroll(1);
+                self.scroll_focused(1);
                 KeyAction::None
             }
             KeyCode::PageUp => {
-                self.scroll(-10);
+                self.scroll_focused(-10);
                 KeyAction::None
             }
             KeyCode::PageDown => {
-                self.scroll(10);
+                self.scroll_focused(10);
                 KeyAction::None
             }
             KeyCode::Home | KeyCode::Char('g') => {
-                self.jump_to(0);
+                self.jump_focused(0);
                 KeyAction::None
             }
             KeyCode::End | KeyCode::Char('G') => {
-                let len = self.active_list_len();
+                let len = self.focused_list_len();
                 if len > 0 {
-                    self.jump_to(len - 1);
+                    self.jump_focused(len - 1);
                 }
                 KeyAction::None
             }
@@ -351,130 +370,422 @@ impl App {
         }
     }
 
-    /// 在 `Session` Tab 的会话列表与 Turn 列表之间切换键盘滚动焦点。
-    fn toggle_session_focus(&mut self) {
-        match self.session_focus {
-            SessionFocus::Sessions => {
-                let turn_count = self
-                    .selected_session()
-                    .map(|s| s.turns.len())
-                    .unwrap_or(0);
-                if turn_count > 0 {
-                    self.session_focus = SessionFocus::Turns;
-                    self.clamp_turn_selection();
+    /// 处理单次鼠标事件（左键点击选中 / 切换 Tab / 开关弹窗，滚轮悬停滚动）。
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) {
+        let col = mouse.column;
+        let row = mouse.row;
+
+        // 弹窗打开时由弹窗独占鼠标交互
+        if self.agent_picker_open {
+            self.handle_picker_mouse(mouse);
+            return;
+        }
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(btn_rect) = self.layout.agent_button_rect {
+                    if rect_contains(btn_rect, col, row) {
+                        self.open_agent_picker();
+                        return;
+                    }
+                }
+
+                for &(tab, rect) in &self.layout.tab_rects {
+                    if rect_contains(rect, col, row) {
+                        self.switch_tab(tab);
+                        return;
+                    }
+                }
+
+                if let Some(upper) = self.layout.upper {
+                    if rect_contains(upper.panel, col, row) && self.current_tab.has_dual_panes() {
+                        self.focus = FocusPane::Upper;
+                        if let Some(rows_rect) = upper.rows {
+                            if rect_contains(rows_rect, col, row) {
+                                self.click_upper_row((row - rows_rect.y) as usize);
+                            }
+                        }
+                        return;
+                    }
+                }
+
+                if let Some(lower) = self.layout.lower {
+                    if rect_contains(lower.panel, col, row) {
+                        if self.current_tab.has_dual_panes() && self.lower_list_len() > 0 {
+                            self.focus = FocusPane::Lower;
+                        }
+                        if let Some(rows_rect) = lower.rows {
+                            if rect_contains(rows_rect, col, row) {
+                                self.click_lower_row((row - rows_rect.y) as usize);
+                            }
+                        }
+                    }
                 }
             }
-            SessionFocus::Turns => {
-                self.session_focus = SessionFocus::Sessions;
+            MouseEventKind::ScrollUp => self.handle_mouse_scroll(col, row, -1),
+            MouseEventKind::ScrollDown => self.handle_mouse_scroll(col, row, 1),
+            _ => {}
+        }
+    }
+
+    /// 处理弹窗打开时的鼠标点击与滚轮事件。
+    fn handle_picker_mouse(&mut self, mouse: MouseEvent) {
+        let col = mouse.column;
+        let row = mouse.row;
+        let len = self.picker_options().len();
+
+        match mouse.kind {
+            MouseEventKind::ScrollUp => scroll_table(&mut self.agent_picker_table, len, -1),
+            MouseEventKind::ScrollDown => scroll_table(&mut self.agent_picker_table, len, 1),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let modal = match self.layout.modal {
+                    Some(m) => m,
+                    None => return,
+                };
+                if let Some(rows_rect) = modal.rows {
+                    if rect_contains(rows_rect, col, row) {
+                        let idx = self.agent_picker_table.offset() + (row - rows_rect.y) as usize;
+                        if idx < len {
+                            self.agent_picker_table.select(Some(idx));
+                            self.confirm_agent_picker();
+                        }
+                        return;
+                    }
+                }
+                if !rect_contains(modal.panel, col, row) {
+                    self.agent_picker_open = false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 根据鼠标悬停位置滚动对应的子框（未命中任何框时滚动当前焦点框）。
+    fn handle_mouse_scroll(&mut self, col: u16, row: u16, delta: isize) {
+        if let Some(upper) = self.layout.upper {
+            if rect_contains(upper.panel, col, row) && self.current_tab.has_dual_panes() {
+                self.scroll_upper(delta);
+                return;
+            }
+        }
+        if let Some(lower) = self.layout.lower {
+            if rect_contains(lower.panel, col, row) {
+                self.scroll_lower(delta);
+                return;
+            }
+        }
+        self.scroll_focused(delta);
+    }
+
+    /// 处理 Agent 选择弹窗内的键盘操作。
+    fn handle_picker_key(&mut self, key: KeyEvent) {
+        let len = self.picker_options().len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('a') | KeyCode::Char('q') => {
+                self.agent_picker_open = false;
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                self.confirm_agent_picker();
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                scroll_table(&mut self.agent_picker_table, len, -1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                scroll_table(&mut self.agent_picker_table, len, 1);
+            }
+            KeyCode::PageUp => {
+                scroll_table(&mut self.agent_picker_table, len, -10);
+            }
+            KeyCode::PageDown => {
+                scroll_table(&mut self.agent_picker_table, len, 10);
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                if len > 0 {
+                    self.agent_picker_table.select(Some(0));
+                }
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                if len > 0 {
+                    self.agent_picker_table.select(Some(len - 1));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 在双表视图的上下两个框之间切换键盘滚动焦点。
+    fn toggle_focus_pane(&mut self) {
+        if !self.current_tab.has_dual_panes() {
+            return;
+        }
+        match self.focus {
+            FocusPane::Upper => {
+                if self.lower_list_len() > 0 {
+                    self.focus = FocusPane::Lower;
+                    self.clamp_detail_selection();
+                }
+            }
+            FocusPane::Lower => {
+                self.focus = FocusPane::Upper;
             }
         }
     }
 
-    /// 返回当前激活 Tab 主滚动列表的行数。
-    fn active_list_len(&self) -> usize {
-        let snap = match self.snapshot.as_ref() {
-            Some(s) => s,
+    /// 当前 Tab 上半主表的行数（`Overview` 无上半表，返回 0）。
+    fn upper_list_len(&self) -> usize {
+        let view = match self.active_view() {
+            Some(v) => v,
             None => return 0,
         };
         match self.current_tab {
-            Tab::Overview => snap.model_rows.len(),
-            Tab::Hour => snap.hourly.rows.len(),
-            Tab::Day => snap.daily.rows.len(),
-            Tab::Week => snap.weekly.rows.len(),
-            Tab::Month => snap.monthly.rows.len(),
-            Tab::Session => match self.session_focus {
-                SessionFocus::Sessions => self.sessions_for_agent(self.session_agent).len(),
-                SessionFocus::Turns => self
-                    .selected_session()
-                    .map(|s| s.turns.len())
-                    .unwrap_or(0),
-            },
+            Tab::Overview => 0,
+            Tab::Hour => view.hourly.rows.len(),
+            Tab::Day => view.daily.rows.len(),
+            Tab::Week => view.weekly.rows.len(),
+            Tab::Month => view.monthly.rows.len(),
+            Tab::Session => view.sessions.len(),
         }
     }
 
-    /// 按偏移量滚动当前聚焦表格的选中行。
-    fn scroll(&mut self, delta: isize) {
-        let len = self.active_list_len();
+    /// 当前 Tab 下半表（`Models` 或 `Turns`）的行数。
+    fn lower_list_len(&self) -> usize {
+        let view = match self.active_view() {
+            Some(v) => v,
+            None => return 0,
+        };
+        match self.current_tab {
+            Tab::Overview => view.model_rows.len(),
+            Tab::Hour => Self::selected_period_breakdown(&view.hourly, &self.hour_table)
+                .map(|(_, items)| items.len())
+                .unwrap_or(0),
+            Tab::Day => Self::selected_period_breakdown(&view.daily, &self.day_table)
+                .map(|(_, items)| items.len())
+                .unwrap_or(0),
+            Tab::Week => Self::selected_period_breakdown(&view.weekly, &self.week_table)
+                .map(|(_, items)| items.len())
+                .unwrap_or(0),
+            Tab::Month => Self::selected_period_breakdown(&view.monthly, &self.month_table)
+                .map(|(_, items)| items.len())
+                .unwrap_or(0),
+            Tab::Session => self
+                .selected_session()
+                .map(|s| s.detail.turns.len())
+                .unwrap_or(0),
+        }
+    }
+
+    /// 当前焦点表的行数。
+    fn focused_list_len(&self) -> usize {
+        if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
+            self.lower_list_len()
+        } else {
+            self.upper_list_len()
+        }
+    }
+
+    /// 滚动当前焦点表。
+    fn scroll_focused(&mut self, delta: isize) {
+        if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
+            self.scroll_lower(delta);
+        } else {
+            self.scroll_upper(delta);
+        }
+    }
+
+    /// 跳转当前焦点表到指定索引。
+    fn jump_focused(&mut self, index: usize) {
+        if !self.current_tab.has_dual_panes() || self.focus == FocusPane::Lower {
+            self.jump_lower(index);
+        } else {
+            self.jump_upper(index);
+        }
+    }
+
+    /// 滚动上半主表；若选中行变化，自动将下半联动表复位到首行。
+    fn scroll_upper(&mut self, delta: isize) {
+        let len = self.upper_list_len();
         if len == 0 {
             return;
         }
-        let prev_selected = self.active_table_mut().selected();
-        let current = prev_selected.unwrap_or(0) as isize;
-        let next = (current + delta).clamp(0, (len - 1) as isize) as usize;
-        self.active_table_mut().select(Some(next));
-
-        if self.current_tab == Tab::Session
-            && self.session_focus == SessionFocus::Sessions
-            && prev_selected != Some(next)
-        {
-            self.reset_turn_selection();
+        let table = match self.upper_table_mut() {
+            Some(t) => t,
+            None => return,
+        };
+        let prev = table.selected();
+        scroll_table(table, len, delta);
+        let next = table.selected();
+        if prev != next {
+            self.reset_detail_selection();
         }
     }
 
-    /// 跳转到当前聚焦表格的指定行。
-    fn jump_to(&mut self, index: usize) {
-        let len = self.active_list_len();
+    /// 跳转上半主表到指定行。
+    fn jump_upper(&mut self, index: usize) {
+        let len = self.upper_list_len();
         if len == 0 {
             return;
         }
         let clamped = index.min(len - 1);
-        let prev_selected = self.active_table_mut().selected();
-        self.active_table_mut().select(Some(clamped));
-
-        if self.current_tab == Tab::Session
-            && self.session_focus == SessionFocus::Sessions
-            && prev_selected != Some(clamped)
-        {
-            self.reset_turn_selection();
+        let table = match self.upper_table_mut() {
+            Some(t) => t,
+            None => return,
+        };
+        let prev = table.selected();
+        table.select(Some(clamped));
+        if prev != Some(clamped) {
+            self.reset_detail_selection();
         }
     }
 
-    fn active_table_mut(&mut self) -> &mut TableState {
+    /// 鼠标点击上半表第 `rel_row` 可见行。
+    fn click_upper_row(&mut self, rel_row: usize) {
+        let len = self.upper_list_len();
+        let table = match self.upper_table_mut() {
+            Some(t) => t,
+            None => return,
+        };
+        let target = table.offset() + rel_row;
+        if target < len {
+            let prev = table.selected();
+            table.select(Some(target));
+            if prev != Some(target) {
+                self.reset_detail_selection();
+            }
+        }
+    }
+
+    /// 滚动下半表（`Overview` 的 `Models` 或双表视图的联动子表）。
+    fn scroll_lower(&mut self, delta: isize) {
+        let len = self.lower_list_len();
+        if len == 0 {
+            return;
+        }
+        scroll_table(self.lower_table_mut(), len, delta);
+    }
+
+    /// 跳转下半表到指定行。
+    fn jump_lower(&mut self, index: usize) {
+        let len = self.lower_list_len();
+        if len == 0 {
+            return;
+        }
+        let clamped = index.min(len - 1);
+        self.lower_table_mut().select(Some(clamped));
+    }
+
+    /// 鼠标点击下半表第 `rel_row` 可见行。
+    fn click_lower_row(&mut self, rel_row: usize) {
+        let len = self.lower_list_len();
+        let table = self.lower_table_mut();
+        let target = table.offset() + rel_row;
+        if target < len {
+            table.select(Some(target));
+        }
+    }
+
+    fn upper_table_mut(&mut self) -> Option<&mut TableState> {
         match self.current_tab {
-            Tab::Overview => &mut self.overview_table,
-            Tab::Hour => &mut self.hour_table,
-            Tab::Day => &mut self.day_table,
-            Tab::Week => &mut self.week_table,
-            Tab::Month => &mut self.month_table,
-            Tab::Session => match self.session_focus {
-                SessionFocus::Sessions => self
-                    .session_tables
-                    .entry(self.session_agent)
-                    .or_insert_with(initial_table_state),
-                SessionFocus::Turns => &mut self.turn_table,
-            },
+            Tab::Overview => None,
+            Tab::Hour => Some(&mut self.hour_table),
+            Tab::Day => Some(&mut self.day_table),
+            Tab::Week => Some(&mut self.week_table),
+            Tab::Month => Some(&mut self.month_table),
+            Tab::Session => Some(&mut self.session_table),
         }
     }
 
-    /// 将 Turn 列表选中行复位到第一条（切换 Agent 或切换选中 Session 时调用）。
-    fn reset_turn_selection(&mut self) {
-        let turn_len = self
-            .selected_session()
-            .map(|s| s.turns.len())
-            .unwrap_or(0);
-        self.turn_table = TableState::default();
-        if turn_len > 0 {
-            self.turn_table.select(Some(0));
+    fn lower_table_mut(&mut self) -> &mut TableState {
+        if self.current_tab == Tab::Overview {
+            &mut self.overview_table
+        } else {
+            &mut self.detail_table
         }
     }
 
-    /// 将 Turn 列表选中行裁剪到当前选中会话的合法范围内。
-    fn clamp_turn_selection(&mut self) {
-        let turn_len = self
-            .selected_session()
-            .map(|s| s.turns.len())
-            .unwrap_or(0);
-        if turn_len == 0 {
-            self.session_focus = SessionFocus::Sessions;
-        }
-        clamp_selection(&mut self.turn_table, turn_len);
+    /// 切换全局 Agent 筛选后，将全部表格复位到首行并按新视角裁剪。
+    fn reset_all_tables(&mut self) {
+        self.overview_table = initial_table_state();
+        self.hour_table = initial_table_state();
+        self.day_table = initial_table_state();
+        self.week_table = initial_table_state();
+        self.month_table = initial_table_state();
+        self.session_table = initial_table_state();
+        self.detail_table = initial_table_state();
+        self.clamp_all_tables();
     }
+
+    /// 按当前快照裁剪全部表格的选中索引。
+    fn clamp_all_tables(&mut self) {
+        let (overview_len, hour_len, day_len, week_len, month_len, session_len) =
+            match self.active_view() {
+                Some(view) => (
+                    view.model_rows.len(),
+                    view.hourly.rows.len(),
+                    view.daily.rows.len(),
+                    view.weekly.rows.len(),
+                    view.monthly.rows.len(),
+                    view.sessions.len(),
+                ),
+                None => (0, 0, 0, 0, 0, 0),
+            };
+
+        clamp_selection(&mut self.overview_table, overview_len);
+        clamp_selection(&mut self.hour_table, hour_len);
+        clamp_selection(&mut self.day_table, day_len);
+        clamp_selection(&mut self.week_table, week_len);
+        clamp_selection(&mut self.month_table, month_len);
+        clamp_selection(&mut self.session_table, session_len);
+
+        self.clamp_detail_selection();
+    }
+
+    /// 将下半联动明细表的选中行复位到首行。
+    fn reset_detail_selection(&mut self) {
+        let len = if self.current_tab.has_dual_panes() {
+            self.lower_list_len()
+        } else {
+            0
+        };
+        self.detail_table = TableState::default();
+        if len > 0 {
+            self.detail_table.select(Some(0));
+        }
+    }
+
+    /// 将下半联动明细表的选中行裁剪到合法范围内。
+    fn clamp_detail_selection(&mut self) {
+        if !self.current_tab.has_dual_panes() {
+            return;
+        }
+        let len = self.lower_list_len();
+        if len == 0 {
+            self.focus = FocusPane::Upper;
+        }
+        clamp_selection(&mut self.detail_table, len);
+    }
+}
+
+/// 判断终端坐标 `(col, row)` 是否落在矩形 `rect` 内。
+fn rect_contains(rect: Rect, col: u16, row: u16) -> bool {
+    col >= rect.x
+        && col < rect.x.saturating_add(rect.width)
+        && row >= rect.y
+        && row < rect.y.saturating_add(rect.height)
 }
 
 fn initial_table_state() -> TableState {
     let mut state = TableState::default();
     state.select(Some(0));
     state
+}
+
+fn scroll_table(state: &mut TableState, len: usize, delta: isize) {
+    if len == 0 {
+        return;
+    }
+    let current = state.selected().unwrap_or(0) as isize;
+    let next = (current + delta).clamp(0, (len - 1) as isize) as usize;
+    state.select(Some(next));
 }
 
 /// 将表格选中索引限制在 `0..len` 内（列表为空时取消选中）。

@@ -642,13 +642,8 @@ pub fn render_session_detail(detail: &SessionDetail) -> String {
 
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(detail.turns.len() + 1);
     for t in &detail.turns {
-        let turn_label = if t.aborted_steps > 0 {
-            format!("#{}*", t.index)
-        } else {
-            format!("#{}", t.index)
-        };
         rows.push(vec![
-            turn_label,
+            format!("#{}", t.index),
             format_datetime(t.first_ts_ms),
             format_models_cell(&t.models),
             t.steps.to_string(),

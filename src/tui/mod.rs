@@ -9,12 +9,14 @@ mod app;
 mod data;
 mod ui;
 
+use std::io;
 use std::sync::mpsc::{self, RecvTimeoutError, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
+use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
+use crossterm::execute;
 use token_counter::core::model::UsageEvent;
 use token_counter::core::pricing::PricingCatalog;
 use token_counter::core::time::TimeRange;
@@ -38,10 +40,12 @@ enum WorkerMsg {
     Error(String),
 }
 
-/// 启动全屏 Ratatui TUI；无论正常退出还是出错均保证恢复终端状态。
+/// 启动全屏 Ratatui TUI；无论正常退出还是出错均保证关闭鼠标捕获并恢复终端状态。
 pub fn run(catalog: PricingCatalog) -> Result<()> {
     let mut terminal = ratatui::init();
+    let _ = execute!(io::stdout(), EnableMouseCapture);
     let result = run_event_loop(&mut terminal, catalog);
+    let _ = execute!(io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -77,18 +81,20 @@ fn run_event_loop(terminal: &mut ratatui::DefaultTerminal, catalog: PricingCatal
 
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
-        // 非阻塞轮询键盘事件，超时则推进动画帧并重绘倒计时
+        // 非阻塞轮询键盘与鼠标事件，超时则推进动画帧并重绘倒计时
         if event::poll(POLL_INTERVAL)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match app.handle_key(key) {
-                        KeyAction::Quit => break,
-                        KeyAction::RefreshNow => {
-                            let _ = cmd_tx.send(WorkerCmd::RefreshNow);
-                        }
-                        KeyAction::None => {}
+            match event::read()? {
+                Event::Key(key) if key.kind == KeyEventKind::Press => match app.handle_key(key) {
+                    KeyAction::Quit => break,
+                    KeyAction::RefreshNow => {
+                        let _ = cmd_tx.send(WorkerCmd::RefreshNow);
                     }
+                    KeyAction::None => {}
+                },
+                Event::Mouse(mouse) => {
+                    app.handle_mouse(mouse);
                 }
+                _ => {}
             }
         }
 

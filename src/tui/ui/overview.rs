@@ -3,32 +3,33 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, TableState};
 use ratatui::Frame;
 
 use super::{
     format_axis_tokens, format_cache, format_cost, format_int, format_speed, format_tokens_m,
     format_ttft, model_color, models_panel, split_upper_and_models, styled_block,
 };
-use crate::tui::app::App;
-use crate::tui::data::{ChartDay, TuiSnapshot};
+use crate::tui::app::TableHit;
+use crate::tui::data::{ChartDay, ViewSnapshot};
 
-/// 渲染 `Overview` 纵览视图。
-pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
-    let snap = match app.snapshot.as_ref() {
-        Some(s) => s.clone(),
-        None => return,
-    };
-
+/// 渲染 `Overview` 纵览视图，返回底部 `Models` 列表的鼠标交互热区。
+pub fn render(
+    frame: &mut Frame,
+    area: Rect,
+    view: &ViewSnapshot,
+    is_partial: bool,
+    table_state: &mut TableState,
+) -> TableHit {
     let (upper_area, models_area) = split_upper_and_models(area);
     let upper_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(4)])
         .split(upper_area);
 
-    render_kpi_bar(frame, &snap, upper_chunks[0]);
-    render_stacked_bar_chart(frame, &snap.chart_days, upper_chunks[1]);
-    let models_title = if snap.is_partial {
+    render_kpi_bar(frame, view, is_partial, upper_chunks[0]);
+    render_stacked_bar_chart(frame, &view.chart_days, upper_chunks[1]);
+    let models_title = if is_partial {
         "Models · Last 30 Days (by tokens)"
     } else {
         "Models · All Time (by tokens)"
@@ -37,14 +38,15 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         frame,
         models_area,
         models_title,
-        &snap.model_rows,
-        Some(&mut app.overview_table),
-    );
+        &view.model_rows,
+        table_state,
+        true,
+    )
 }
 
 /// 顶部一行 KPI 摘要条：活跃天数、请求数、总 Tokens、总美元、缓存占比、平均 TTFT、平均纯解码速度。
-fn render_kpi_bar(frame: &mut Frame, snap: &TuiSnapshot, area: Rect) {
-    let title = if snap.is_partial {
+fn render_kpi_bar(frame: &mut Frame, view: &ViewSnapshot, is_partial: bool, area: Rect) {
+    let title = if is_partial {
         "Last 30 Days Summary (loading history...)"
     } else {
         "All Time Summary"
@@ -53,9 +55,9 @@ fn render_kpi_bar(frame: &mut Frame, snap: &TuiSnapshot, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let total = &snap.overall_total;
+    let total = &view.overall_total;
     let mut items = vec![
-        ("Days ", snap.daily.rows.len().to_string(), Color::White),
+        ("Days ", view.daily.rows.len().to_string(), Color::White),
         ("Reqs ", format_int(total.requests), Color::White),
         ("Tokens ", format_tokens_m(total.total_tokens()), Color::Cyan),
         ("Cost ", format_cost(total.cost_usd), Color::Green),

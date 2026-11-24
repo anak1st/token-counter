@@ -7,16 +7,16 @@
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{
-    Cell, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
-};
+use ratatui::widgets::{Cell, Row, Table, TableState};
 use ratatui::Frame;
 use token_counter::report::aggregate::BucketRow;
 
 use super::{
     format_cache, format_cost, format_int, format_speed, format_tokens_m, format_ttft,
-    highlight_style, model_color, styled_block, table_header_style,
+    highlight_style, model_color, panel_block, render_scrollbar, table_header_style,
+    table_rows_rect,
 };
+use crate::tui::app::TableHit;
 use crate::tui::data::ModelRow;
 
 /// 展开完整 token 细分列（`In / Out / Cache`）所需的最小宽度。
@@ -117,15 +117,16 @@ pub fn metrics_table_row<'a>(first_cell: Cell<'a>, m: &BucketRow, wide: bool) ->
     }
 }
 
-/// 渲染统一的模型面板；`state` 为 `Some` 时启用行高亮与滚动条（用于 `Overview`）。
+/// 渲染统一的模型面板（支持聚焦亮框、选中高亮与滚动条），返回鼠标点击热区。
 pub fn render(
     frame: &mut Frame,
     area: Rect,
     title: &str,
     items: &[ModelRow],
-    state: Option<&mut TableState>,
-) {
-    let block = styled_block(title);
+    table_state: &mut TableState,
+    focused: bool,
+) -> TableHit {
+    let block = panel_block(title, focused);
     let inner = block.inner(area);
     let wide = area.width >= WIDE_TABLE_THRESHOLD;
 
@@ -147,20 +148,15 @@ pub fn render(
         .block(block)
         .column_spacing(TABLE_COL_SPACING);
 
-    if let Some(table_state) = state {
+    if focused {
         table = table.row_highlight_style(highlight_style());
-        frame.render_stateful_widget(table, area, table_state);
+    }
 
-        if items.len() > inner.height.saturating_sub(1) as usize {
-            let selected = table_state.selected().unwrap_or(0);
-            let mut sb_state = ScrollbarState::new(items.len()).position(selected);
-            frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight),
-                area,
-                &mut sb_state,
-            );
-        }
-    } else {
-        frame.render_widget(table, area);
+    frame.render_stateful_widget(table, area, table_state);
+    render_scrollbar(frame, area, inner, items.len(), table_state.selected());
+
+    TableHit {
+        panel: area,
+        rows: Some(table_rows_rect(inner)),
     }
 }

@@ -26,11 +26,11 @@ impl Agent {
         }
     }
 
-    /// 用于表格与 TUI 徽章的简短展示名。
+    /// 用于表格与弹窗的展示全称。
     pub fn label(self) -> &'static str {
         match self {
             Agent::Opencode => "OpenCode",
-            Agent::Dsh => "DSH",
+            Agent::Dsh => "DeepSeek Harness",
             Agent::Agy => "Antigravity",
         }
     }
