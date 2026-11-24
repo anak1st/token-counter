@@ -309,6 +309,7 @@ pub fn scan_conversation(
         events.push(UsageEvent {
             agent: Agent::Agy,
             session: session.clone(),
+            session_label: None,
             provider: default_provider.clone(),
             model: identity.name,
             ts_ms,

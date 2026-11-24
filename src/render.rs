@@ -1,27 +1,15 @@
 //! 单次 CLI 输出的纯文本对齐表格渲染器。
 //!
 //! 约定：
-//! - 输出文案全英文，纯空格对齐，无装饰线条，无 ANSI 颜色（丰富视觉留在 TUI）。
-//! - 总计表与所有分组表共用同一套列宽以及全局最大分桶 token 刻度。
+//! - 输出文案全英文，纯空格对齐，无装饰线条，无 ANSI 颜色，无图表（丰富视觉全部留给 TUI）。
+//! - 总计表与所有分组表共用同一套 6 列宽度，保证整段输出纵向对齐。
 //! - 费用统一以美元结算并展示（`$0.123`）。
 
 use crate::aggregate::{BucketRow, ModelGroup, Report};
 use crate::pricing::ModelPricing;
 
-/// 7 列的右对齐标志：`[时间桶, Tokens, Chart, Cache%, Cost, TTFT, Speed]`。
-const RIGHT_ALIGN: [bool; 7] = [false, true, false, true, true, true, true];
-
-/// 用于计算行内 `Chart` 列宽的默认目标行宽与上下限。
-const DEFAULT_TERMINAL_WIDTH: usize = 80;
-const MIN_CHART_WIDTH: usize = 8;
-const MAX_CHART_WIDTH: usize = 30;
-
-/// 整份报表所有表格共用的列宽与柱状图刻度。
-struct Layout {
-    widths: [usize; 7],
-    chart_width: usize,
-    max_tokens: u64,
-}
+/// 6 列的右对齐标志：`[时间桶, Tokens, Cache%, Cost, TTFT, Speed]`。
+const RIGHT_ALIGN: [bool; 6] = [false, true, true, true, true, true];
 
 /// 将无符号整数格式化为千分位逗号形式（如 `1,234,567`）。
 fn format_int(n: u64) -> String {
@@ -69,8 +57,8 @@ fn format_price_line(pricing: &ModelPricing) -> String {
     )
 }
 
-/// 生成不含 `Chart` 列的 6 个基础单元格文案；空样本用 `—`。
-fn base_cells(row: &BucketRow) -> [String; 6] {
+/// 生成单行的 6 个单元格文案；空样本用 `—`。
+fn row_cells(row: &BucketRow) -> [String; 6] {
     let tokens = format_int(row.total_tokens());
 
     let cache = match row.cache_percent() {
@@ -93,7 +81,7 @@ fn base_cells(row: &BucketRow) -> [String; 6] {
     [row.label.clone(), tokens, cache, cost, ttft, speed]
 }
 
-/// 按字符数计算列宽（避免 `—`、`█` 等多字节 UTF-8 字符导致对齐错位）。
+/// 按字符数计算列宽（避免 `—` 等多字节 UTF-8 字符导致对齐错位）。
 fn char_width(s: &str) -> usize {
     s.chars().count()
 }
@@ -112,91 +100,48 @@ fn pad_cell(text: &str, width: usize, right_align: bool) -> String {
     }
 }
 
-/// 以双空格连接 7 个对齐后的单元格，并裁掉行尾多余空格。
-fn join_row(cells: &[String; 7], widths: &[usize; 7]) -> String {
-    let mut parts = Vec::with_capacity(7);
-    for i in 0..7 {
+/// 以双空格连接 6 个对齐后的单元格，并裁掉行尾多余空格。
+fn join_row(cells: &[String; 6], widths: &[usize; 6]) -> String {
+    let mut parts = Vec::with_capacity(6);
+    for i in 0..6 {
         parts.push(pad_cell(&cells[i], widths[i], RIGHT_ALIGN[i]));
     }
     parts.join("  ").trim_end().to_string()
 }
 
-/// 扫描总计表与全部分组表，计算统一列宽与全局 `max_tokens`。
-fn compute_layout(report: &Report, target_width: usize) -> Layout {
+/// 扫描总计表与全部分组表，计算全局统一的 6 列列宽。
+fn compute_widths(report: &Report) -> [usize; 6] {
     let first_header = report.granularity.column_header();
-    let base_headers = [first_header, "Tokens", "Cache%", "Cost", "TTFT", "Speed"];
+    let headers = [first_header, "Tokens", "Cache%", "Cost", "TTFT", "Speed"];
 
-    let mut base_widths = [0usize; 6];
+    let mut widths = [0usize; 6];
     for i in 0..6 {
-        base_widths[i] = char_width(base_headers[i]);
+        widths[i] = char_width(headers[i]);
     }
 
-    let mut max_tokens: u64 = 0;
-
-    let mut update_from_row = |row: &BucketRow, is_bucket: bool| {
-        let cells = base_cells(row);
+    let mut update_from_row = |row: &BucketRow| {
+        let cells = row_cells(row);
         for i in 0..6 {
             let w = char_width(&cells[i]);
-            if w > base_widths[i] {
-                base_widths[i] = w;
-            }
-        }
-        if is_bucket {
-            let total = row.total_tokens();
-            if total > max_tokens {
-                max_tokens = total;
+            if w > widths[i] {
+                widths[i] = w;
             }
         }
     };
 
     for row in &report.overall.rows {
-        update_from_row(row, true);
+        update_from_row(row);
     }
-    update_from_row(&report.overall.total, false);
+    update_from_row(&report.overall.total);
 
     for group in &report.groups {
         for row in &group.rows {
-            update_from_row(row, true);
+            update_from_row(row);
         }
-        update_from_row(&group.total, false);
+        update_from_row(&group.total);
     }
 
-    // 7 列共 6 个双空格间距（12 列），剩余空间分配给 Chart 并夹在 8..=30
-    let fixed_width: usize = base_widths.iter().sum::<usize>() + 12;
-    let available = target_width.saturating_sub(fixed_width);
-    let chart_width = available.clamp(MIN_CHART_WIDTH, MAX_CHART_WIDTH);
-
-    let widths = [
-        base_widths[0],
-        base_widths[1],
-        chart_width,
-        base_widths[2],
-        base_widths[3],
-        base_widths[4],
-        base_widths[5],
-    ];
-
-    Layout {
-        widths,
-        chart_width,
-        max_tokens,
-    }
-}
-
-/// 生成单行 token 块状条：所有表共用全局 `max_tokens`，最大值填满整条。
-fn token_bar(tokens: u64, layout: &Layout) -> String {
-    if layout.max_tokens == 0 {
-        return "—".to_string();
-    }
-    if tokens == 0 {
-        return " ".repeat(layout.chart_width);
-    }
-
-    let ratio = tokens as f64 / layout.max_tokens as f64;
-    let scaled = (ratio * layout.chart_width as f64).round() as usize;
-    let filled = scaled.clamp(1, layout.chart_width);
-    let empty = layout.chart_width - filled;
-    format!("{}{}", "█".repeat(filled), " ".repeat(empty))
+    widths
 }
 
 /// 渲染单张表格（表头 + 各分桶行 + `Total` 行）。
@@ -204,12 +149,11 @@ fn render_table(
     first_header: &str,
     rows: &[BucketRow],
     total: &BucketRow,
-    layout: &Layout,
+    widths: &[usize; 6],
 ) -> Vec<String> {
     let header_cells = [
         first_header.to_string(),
         "Tokens".to_string(),
-        "Chart".to_string(),
         "Cache%".to_string(),
         "Cost".to_string(),
         "TTFT".to_string(),
@@ -217,45 +161,18 @@ fn render_table(
     ];
 
     let mut lines = Vec::with_capacity(rows.len() + 2);
-    lines.push(join_row(&header_cells, &layout.widths));
+    lines.push(join_row(&header_cells, widths));
 
     for row in rows {
-        let base = base_cells(row);
-        let chart = token_bar(row.total_tokens(), layout);
-        let full = [
-            base[0].clone(),
-            base[1].clone(),
-            chart,
-            base[2].clone(),
-            base[3].clone(),
-            base[4].clone(),
-            base[5].clone(),
-        ];
-        lines.push(join_row(&full, &layout.widths));
+        lines.push(join_row(&row_cells(row), widths));
     }
 
-    let total_base = base_cells(total);
-    let total_full = [
-        total_base[0].clone(),
-        total_base[1].clone(),
-        "—".to_string(),
-        total_base[2].clone(),
-        total_base[3].clone(),
-        total_base[4].clone(),
-        total_base[5].clone(),
-    ];
-    lines.push(join_row(&total_full, &layout.widths));
-
+    lines.push(join_row(&row_cells(total), widths));
     lines
 }
 
-/// 按默认行宽渲染完整报表。
+/// 渲染完整纯文本对齐报表。
 pub fn render_report(report: &Report) -> String {
-    render_report_with_width(report, DEFAULT_TERMINAL_WIDTH)
-}
-
-/// 按指定目标行宽渲染完整报表。
-pub fn render_report_with_width(report: &Report, width: usize) -> String {
     let mut lines: Vec<String> = Vec::new();
 
     if report.groups.is_empty() {
@@ -265,7 +182,7 @@ pub fn render_report_with_width(report: &Report, width: usize) -> String {
         return format!("unknown models: {}", report.unknown_models.join(", "));
     }
 
-    let layout = compute_layout(report, width);
+    let widths = compute_widths(report);
     let first_header = report.granularity.column_header();
 
     lines.push("all models".to_string());
@@ -273,11 +190,11 @@ pub fn render_report_with_width(report: &Report, width: usize) -> String {
         first_header,
         &report.overall.rows,
         &report.overall.total,
-        &layout,
+        &widths,
     ));
 
     for group in &report.groups {
-        render_group(&mut lines, first_header, group, &layout);
+        render_group(&mut lines, first_header, group, &widths);
     }
 
     if !report.unknown_models.is_empty() {
@@ -292,11 +209,11 @@ pub fn render_report_with_width(report: &Report, width: usize) -> String {
 }
 
 /// 向输出追加一个 `(provider, model)` 分组段落。
-fn render_group(lines: &mut Vec<String>, first_header: &str, group: &ModelGroup, layout: &Layout) {
+fn render_group(lines: &mut Vec<String>, first_header: &str, group: &ModelGroup, widths: &[usize; 6]) {
     lines.push(String::new());
     lines.push(format!("{} · {}", group.provider, group.model));
     lines.push(format_price_line(&group.pricing));
-    lines.extend(render_table(first_header, &group.rows, &group.total, layout));
+    lines.extend(render_table(first_header, &group.rows, &group.total, widths));
 }
 
 #[cfg(test)]

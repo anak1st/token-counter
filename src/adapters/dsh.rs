@@ -35,6 +35,7 @@ struct RawEvent {
     seq: Option<i64>,
     time: Option<i64>,
     id: Option<String>,
+    cwd: Option<String>,
     #[serde(rename = "seedLength")]
     seed_length: Option<i64>,
     data: Option<Value>,
@@ -43,6 +44,7 @@ struct RawEvent {
 /// 逐行解析单个会话文件时的上下文状态。
 struct FileState {
     session_id: String,
+    session_label: Option<String>,
     provider: Option<String>,
     model: String,
     /// fork 会话继承自父会话的前缀长度（普通会话为 0）。
@@ -61,6 +63,7 @@ impl FileState {
     fn new(fallback_session: String) -> Self {
         Self {
             session_id: fallback_session,
+            session_label: None,
             provider: None,
             model: "unknown".to_string(),
             seed_length: 0,
@@ -219,6 +222,9 @@ fn process_line(
             if let Some(id) = ev.id {
                 state.session_id = id;
             }
+            if let Some(cwd) = ev.cwd {
+                state.session_label = extract_dir_name(&cwd);
+            }
             if let Some(seed) = ev.seed_length {
                 if seed > 0 {
                     state.seed_length = seed;
@@ -338,6 +344,7 @@ fn process_line(
     let event = UsageEvent {
         agent: Agent::Dsh,
         session: state.session_id.clone(),
+        session_label: state.session_label.clone(),
         provider: state.provider.clone(),
         model: identity.name,
         ts_ms,
@@ -427,4 +434,13 @@ fn extract_stream_timing(
 /// 从 JSON 对象安全读取非负整数字段，缺省为 0。
 fn get_u64(obj: &Value, key: &str) -> u64 {
     obj.get(key).and_then(Value::as_u64).unwrap_or(0)
+}
+
+/// 从工作目录路径提取末级目录名作为会话标签（如 `/Users/me/Code/app` -> `app`）。
+fn extract_dir_name(cwd: &str) -> Option<String> {
+    let name = Path::new(cwd).file_name()?.to_str()?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    Some(name.to_string())
 }

@@ -38,6 +38,12 @@ pub struct TimeRange {
 }
 
 impl TimeRange {
+    /// 覆盖全量历史的时间范围（供 session 全量列表与查找使用）。
+    pub const ALL: TimeRange = TimeRange {
+        start_ms: 0,
+        end_ms: i64::MAX,
+    };
+
     /// 构造覆盖最近 `count` 个分桶（含当前分桶）的本地时间区间。
     pub fn last_n(granularity: Granularity, count: u32) -> Result<Self> {
         let now = ZonedDateTime::now();
@@ -125,6 +131,24 @@ impl TimeRange {
 /// 将毫秒时间戳格式化为本地时区的分桶键。
 pub fn bucket_key(ts_ms: i64, granularity: Granularity) -> String {
     bucket_key_in_tz(ts_ms, granularity, &TimeZone::system())
+}
+
+/// 将毫秒时间戳格式化为本地时区的 `YYYY-MM-DD HH:MM` 字符串（用于会话与轮次时间展示）。
+pub fn format_datetime(ts_ms: i64) -> String {
+    let ts = match Timestamp::from_millisecond(ts_ms) {
+        Ok(ts) => ts,
+        Err(_) => return "unknown".to_string(),
+    };
+    let zoned = ts.to_zoned_datetime(TimeZone::system());
+    let date = zoned.date();
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        date.year(),
+        date.month(),
+        date.day(),
+        zoned.hour(),
+        zoned.minute()
+    )
 }
 
 /// 将毫秒时间戳按指定时区格式化为分桶键。

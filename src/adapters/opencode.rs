@@ -6,6 +6,7 @@
 //! - `ttft_ms`：首个 reasoning part 的 `time.created` 减去消息 `time.created`（近似值）。
 //! - `duration_ms`：`time.streamed` 减去首个 reasoning part 的 `time.created`（纯解码窗口，不含工具执行）。
 
+use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -102,34 +103,83 @@ pub fn scan_path(
     let conn = Connection::open_with_flags(path, flags)
         .with_context(|| format!("cannot open opencode db at {}", path.display()))?;
 
+    let titles = load_session_titles(&conn);
+
+    // 按 (session_id, seq, time_created) 同时读 user 与 assistant 行，用 user 行划分 turn
     let mut stmt = conn.prepare(
-        "SELECT session_id, time_created, data
+        "SELECT session_id, type, time_created, data
          FROM session_message
-         WHERE type = 'assistant' AND time_created >= ?1 AND time_created < ?2
-         ORDER BY time_created",
+         WHERE type IN ('user', 'assistant') AND time_created >= ?1 AND time_created < ?2
+         ORDER BY session_id, seq, time_created",
     )?;
 
     let rows = stmt.query_map(params![range.start_ms, range.end_ms], |row| {
         let session_id: String = row.get(0)?;
-        let time_created: i64 = row.get(1)?;
-        let raw_data: String = row.get(2)?;
-        Ok((session_id, time_created, raw_data))
+        let msg_type: String = row.get(1)?;
+        let time_created: i64 = row.get(2)?;
+        let raw_data: String = row.get(3)?;
+        Ok((session_id, msg_type, time_created, raw_data))
     })?;
 
     let mut events = Vec::new();
+    let mut turn_by_session: HashMap<String, u32> = HashMap::new();
+
     for row_result in rows {
-        let (session_id, time_created, raw_data) = row_result?;
+        let (session_id, msg_type, time_created, raw_data) = row_result?;
+        if msg_type == "user" {
+            let counter = turn_by_session.entry(session_id).or_insert(0);
+            *counter += 1;
+            continue;
+        }
+
         let data: MessageData = match serde_json::from_str(&raw_data) {
             Ok(parsed) => parsed,
             Err(_) => continue,
         };
 
-        if let Some(event) = build_event(session_id, time_created, data, catalog) {
+        let turn_num = *turn_by_session.entry(session_id.clone()).or_insert(1);
+        let session_label = titles.get(&session_id).cloned();
+
+        if let Some(event) = build_event(
+            session_id,
+            session_label,
+            turn_num.to_string(),
+            time_created,
+            data,
+            catalog,
+        ) {
             events.push(event);
         }
     }
 
     Ok(events)
+}
+
+/// 从 `session_v2` 读取非空会话标题（只取展示标签，不取其汇总 token）。
+fn load_session_titles(conn: &Connection) -> HashMap<String, String> {
+    let mut titles = HashMap::new();
+    let mut stmt = match conn.prepare("SELECT id, title FROM session_v2 WHERE title != ''") {
+        Ok(s) => s,
+        Err(_) => return titles,
+    };
+
+    let rows = match stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        Ok((id, title))
+    }) {
+        Ok(r) => r,
+        Err(_) => return titles,
+    };
+
+    for item in rows.flatten() {
+        let trimmed = item.1.trim();
+        if !trimmed.is_empty() {
+            titles.insert(item.0, trimmed.to_string());
+        }
+    }
+
+    titles
 }
 
 /// 提取首个 reasoning part 的创建时刻作为流起点（text part 无时间戳，仅 reasoning 携带）。
@@ -157,6 +207,8 @@ fn first_reasoning_time(parts: Option<&[MessagePart]>) -> Option<i64> {
 /// 将单条解析后的 `session_message` 转为归一化 `UsageEvent`。
 fn build_event(
     session_id: String,
+    session_label: Option<String>,
+    turn: String,
     row_time_created: i64,
     data: MessageData,
     catalog: &PricingCatalog,
@@ -216,6 +268,7 @@ fn build_event(
     Some(UsageEvent {
         agent: Agent::Opencode,
         session: session_id,
+        session_label,
         provider,
         model: identity.name,
         ts_ms,
@@ -225,7 +278,7 @@ fn build_event(
         ttft_ms,
         duration_ms,
         role: data.agent,
-        turn: None,
+        turn: Some(turn),
         aborted,
     })
 }

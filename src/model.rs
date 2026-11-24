@@ -87,6 +87,8 @@ pub struct UsageEvent {
     pub agent: Agent,
     /// 源里的会话标识。
     pub session: String,
+    /// 可选的人类可读会话标签（如 dsh 的项目目录名、opencode 的会话标题）。
+    pub session_label: Option<String>,
     /// 源里记录的 provider / 网关名（分组时缺省归为 `unknown`）。
     pub provider: Option<String>,
     /// 统一后的小写模型名（未知模型保留小写原名）。
