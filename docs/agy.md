@@ -10,7 +10,7 @@
 
 每个会话（含子代理独立会话）对应一个独立的 SQLite 库文件：
 
-- **活跃会话**（当前正在运行）：同目录下存在 `.db-shm` 与非空 `.db-wal`，**必须只读打开**（`new Database(path, { readonly: true })`），才能读到尚未 checkpoint 的 `-wal` 增量。
+- **活跃会话**（当前正在运行）：同目录下存在 `.db-shm` 与非空 `.db-wal`，**必须只读打开**（`rusqlite` 以 `SQLITE_OPEN_READ_ONLY` 打开），才能读到尚未 checkpoint 的 `-wal` 增量。
 - **已关闭会话**（Antigravity 退出/切换后 cleanly closed）：`-shm` 与 `-wal` 已合并清除，但库头仍为 WAL 模式（writer/read version = 2）。无 `-shm` 时 SQLite 普通只读打开会报 `SQLITE_CANTOPEN`（errno 14），因此当 `-wal` 不存在或为空时，需以 `file:<path>?immutable=1` 打开。
 
 周边目录与文件（均**不是**用量主源）：
@@ -86,6 +86,8 @@
 3. **不与 `transcript.jsonl` 双计**：只读 `conversations/*.db`，`brain/` 下的 `transcript.jsonl` 不参与取数。
 4. **文件 mtime 剪枝**：活跃库增量写在 `.db-wal` 中，`.db` 本体 mtime 可能滞后；按区间起点剪枝时需取 `max(mtime(.db), mtime(.db-wal))`。
 5. **`status !== 3` 记为 `aborted`**（Antigravity 中 `3` 表示 `DONE`；若某未完成步零用量则直接跳过）。
+6. **空 Protobuf Timestamp / Duration 不造假**：当 `f11` / `f12` 或 `f6` / `f7` 为空 submessage（全零）时返回 `None`，不记作 `0ms` TTFT。
+7. **Turn 归属**：`steps.metadata.f12` 作为 `UsageEvent.turn`，用于会话级 Turn 聚合。
 
 ## 速度原料
 
@@ -97,11 +99,11 @@
 
 ## 模型与价格
 
-本机数据与 Antigravity / Google Gemini API 常见模型（`provider` 统一记为 `google`，均无官方人民币价，仅以美元计价与展示）：
+本机数据与 Antigravity / Google Gemini API 常见模型（`provider` 统一记为 `google`，配置在 `config/models.json`，统一以官方美元价结算）：
 
 | 模型 ID | 常规美元价（in miss / hit / out per 1M tok） | 备注 |
 |---|---|---|
-| `gemini-4-hydrogen` | `$1.50 / $0.075 / $7.50` | 本机实测已出现（`(High)`） |
+| `gemini-4-hydrogen` | `$1.50 / $0.075 / $7.50` | 含 `gemini-4-hydrogen-tiered-high` 等别名 |
 | `gemini-4-neon` | `$3.00 / $0.15 / $15.00` | 本机实测已出现（`(Medium)`） |
 | `gemini-4-argon` | `$4.00 / $0.20 / $20.00` | 2026-11-30 前首发价 `$2.00 / $0.10 / $10.00`，按项目惯例取常规价 |
 | `gemini-4-carbon` | `$4.00 / $0.20 / $20.00` | 2026-11-30 前首发价 `$2.00 / $0.10 / $10.00`，按项目惯例取常规价 |
@@ -109,8 +111,7 @@
 | `gemini-3.5-flash-lite` | `$0.30 / $0.03 / $2.50` | 轻量低延迟档 |
 | `gemini-3.1-pro-preview` | `$2.00 / $0.20 / $12.00` | `<=200k` 上下文常规价 |
 
-- 以上模型均无官方人民币定价，按项目规则不进行汇率换算，仅以美元计价与展示。
-- 思考档位后缀名（如 `-low` / `-medium` / `-high` 与展示名）均逐个显式列在 `aliases` 中归一到对应统一模型名。
+- 思考档位后缀名（如 `-low` / `-medium` / `-high` / `-tiered-high` 与展示名）均逐个显式列在 `config/models.json` 的 `aliases` 中，全部小写归一到对应统一模型名。
 
 ## 数据覆盖
 

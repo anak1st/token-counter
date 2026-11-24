@@ -1,6 +1,6 @@
 # dsh（DeepSeek Harness）数据源探索
 
-> 实测日期：2026-10-09，本机数据。zstd 解压用系统 `zstd -dc`（Bun 1.4 尚无内置 zstd API）。
+> 实测日期：2026-10-09，本机数据。Rust adapter 通过 `zstd` crate 进程内解压并用 `std::thread::scope` 并行扫描；支持 `$DSH_HOME` 覆盖默认目录 `~/.dsh`。
 
 ## 位置与存储形式
 
@@ -119,7 +119,7 @@ usage 事件本身不带模型，模型在：
 
 一个会话内模型可能变化（按 `request/context` 出现的 seq 分段归属）。
 
-**模型命名**：源里会出现 `deepseek-flash`（2026-09-10 起的无版本名）、`deepseek-v4.1-flash`，以及更老的 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`。adapter 入口用 `pricing.ts` 的 `identifyModel` 统一归到 `deepseek-v4.1-flash`（最新版本）；`deepseek-flash` 等旧名保留在 `aliases` 里，分组与展示都用统一名。
+**模型命名**：源里会出现 `deepseek-flash`（2026-09-10 起的无版本名）、`deepseek-v4.1-flash`，以及更老的 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`。adapter 入口用 `PricingCatalog::identify`（`config/models.json`）统一归到 `deepseek-v4.1-flash`（最新版本）；`deepseek-flash` 等旧名保留在 `aliases` 里，分组与展示都用统一名。
 
 ## 事件通用结构
 
@@ -134,13 +134,13 @@ usage 事件本身不带模型，模型在：
 
 ## ⚠️ 关键注意事项
 
-1. **没有任何 cost 字段** → 必须走 `src/pricing.ts` 价格表（当前统一按高峰价，见 README）。
+1. **没有任何 cost 字段** → 必须走 `config/models.json` 官方美元价目表。
 2. **格式版本不统一**：adapter 只解析 v4，旧格式 / v3 静默跳过；文件名与首行 `session.version` 的对应关系为：`session.jsonl.zstd` ↔ version 0、`.v3.` ↔ 3、`.v4.` ↔ 4，**以内容 version 字段为准**。
-3. **增量写入**：活跃会话文件持续追加写；文件整体是 zstd 流，**无法只读尾部**，每次需全量解压（单文件最大约 0.5 MB，可接受）。
+3. **增量写入与 Fork 去重**：活跃会话文件持续追加写，文件整体是 zstd 流，每次全量解压；`session` 首行若带 `fork.seedLength`，需跳过前 `seedLength` 条继承事件避免与父会话双计；同时按 `seq` 去重并过滤零用量事件。
 4. `session.lock`（0 字节）出现在活跃会话目录，可作为"正在写"的信号，但读取本身不受影响。
-5. 速度指标：
-   - tokens/s = `outputTokens ÷ Σ(stream[] 末块 time − 首块 time)`（纯解码，剔除 TTFT 与工具执行；无分块时退回 step 跨度）
-   - 首 token 延迟 = `stream[]` 首块 time − 同 step 的 `step/start` time（不能用 usage 事件 time——那是流结束时刻）
+5. 速度指标（**宁缺毋滥，无可靠流式样本时留空，不用 `step/end - step/start` 兜底**）：
+   - `tokens/s` = `outputTokens ÷ Σ(stream[] 末块 time − 首块 time)`（纯解码窗口，剔除 TTFT 与工具执行）
+   - `TTFT` = `stream[]` 首块 `time` − 同 step 的 `step/start` `time`（不能用 `assistant/message` 事件 `time`——那是流结束时刻）
 
 ## 验证过的命令
 

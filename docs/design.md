@@ -1,0 +1,114 @@
+# 设计说明
+
+`token-counter` 是一个用 **Rust + Ratatui** 编写的本地 AI 编程 Agent 用量、费用与速度分析工具。核心原则：**无本地存储、只读直扫、精确计价、速度指标宁缺毋滥**。
+
+## 1. 数据流与分层架构
+
+```text
+本地数据源（只读）
+  ├── ~/.local/share/opencode/opencode.db          (SQLite WAL)
+  ├── ~/.dsh/sessions/**/session.v4.jsonl.zstd     (zstd JSONL，进程内并行解压)
+  └── ~/.gemini/antigravity/conversations/*.db     (SQLite + Protobuf)
+          │
+          ▼  src/adapters/（统一 ScanQuery 剪枝）
+     Vec<UsageEvent>  ← 入口即完成模型名归一 + 官方美元计价（src/core/pricing.rs）
+          │
+          ├──► src/report/aggregate.rs + render.rs  ──► 单次 CLI 纯文本报表
+          ├──► src/report/session.rs                ──► 单次 CLI 会话 / Turn 查询
+          └──► src/tui/                             ──► Ratatui 交互式 TUI 面板
+```
+
+### 目录结构
+
+```text
+config/
+└── models.json               # 内嵌官方美元价目表与别名映射（全小写）
+docs/
+├── design.md                 # 架构与统计口径说明（本文档）
+├── opencode.md               # opencode 数据源调研
+├── dsh.md                    # dsh 数据源调研（仅 v4）
+└── agy.md                    # agy（Antigravity）数据源调研
+src/
+├── main.rs                   # 薄入口：CLI 解析分发 / 启动 TUI
+├── lib.rs                    # 核心库导出（core / adapters / report）
+├── core/
+│   ├── model.rs              # Agent 枚举、Usage 与归一化 UsageEvent
+│   ├── pricing.rs            # config/models.json 加载、全小写校验、USD 计价
+│   └── time.rs               # jiff 本地时区时间窗与 Hour/Day/Week/Month 分桶
+├── adapters/
+│   ├── mod.rs                # ScanQuery（Range / RecentSessions / SessionPrefix）
+│   ├── opencode.rs           # opencode SQLite 只读解析与 Turn 切分
+│   ├── dsh.rs                # dsh v4 三层并行解析（字节预筛 + 类型化 + thread::scope）
+│   └── agy.rs                # agy SQLite（WAL / immutable）+ 零依赖 Protobuf 解码
+├── report/
+│   ├── aggregate.rs          # 按 (agent, provider, model, bucket) 聚合
+│   ├── render.rs             # 纯空格对齐单次报表（无边框、无 ANSI 颜色）
+│   └── session.rs            # 会话列表、前缀匹配与 Turn 级聚合
+├── cli/
+│   ├── mod.rs                # Clap 子命令定义（全英文 help）
+│   └── spinner.rs            # 零依赖 TTY 读秒加载动画（完成后同行覆盖）
+└── tui/
+    ├── mod.rs                # 终端生命周期与两段式 60s 后台刷新线程
+    ├── app.rs                # 6 个 Tab 状态、各表独立滚动与快捷键分发
+    ├── data.rs               # TuiSnapshot 快照构建（PeriodData / ChartDay / Sessions）
+    └── ui/
+        ├── mod.rs            # 三段式布局、60%/40% 统一高度与公共格式化
+        ├── overview.rs       # KPI 条 + 30 天堆叠柱状图 + 全量 Models 面板
+        ├── period.rs         # Hour / Day / Week / Month 通用上下联动双表
+        ├── models_panel.rs   # 统一 Models 面板与跨表共享的右侧数值列宽
+        └── session.rs        # Agent 切换按钮栏 + Sessions 列表 + Turns 明细
+```
+
+## 2. 归一化事件与指标口径
+
+所有 adapter 在读取边界将数据归一化为 `UsageEvent`，下游统计层不关心具体来源格式。
+
+### Token 分项不变量
+
+- `input`：仅包含**未命中缓存**的输入 token（源若合并了 `cache_read`，adapter 入口必须扣减）。
+- `output` 与 `reasoning` 互斥（源若为包含关系，adapter 入口必须拆分或全留 `output`）。
+- `Tokens = input + output + reasoning + cache_read + cache_write`。
+- `Cache% = (cache_read + cache_write) / Tokens × 100%`。
+- TUI 展示层将 `Out` 定义为 `output + reasoning`，不再单独占一列 `Reason`，保证 `In + Out + Cache == Tokens`，且全部 token 列统一按 `M` 单位保留 3 位小数对齐。
+
+### 计价口径
+
+- 价目表定义在 `config/models.json`（编译期嵌入二进制），支持用户通过 `~/.config/token-counter/models.json` 覆盖。
+- 启动时严格校验：所有模型主键与 `aliases` 必须全小写且无冲突。
+- **不采信任何数据源自带的 `cost` 字段，不换汇**，统一按官方美元标准价计算：
+  - `input` 与 `cache_write` 按 `input_cache_miss` 计价；
+  - `cache_read` 按 `input_cache_hit` 计价；
+  - `output + reasoning` 按 `output` 计价。
+- 查不到定价的模型记入 `unknown_models`，不参与费用汇总并在界面提示，便于补充配置。
+
+### 速度与上下文指标
+
+- **TTFT**（首 token 延迟）：仅聚合带可靠首包样本的请求均值（秒）。无可靠样本时留空（`—`），绝不用总耗时兜底。
+- **Speed**（纯解码吞吐，`tok/s`）：按有可靠纯解码窗口样本的请求汇总 `Σ(output + reasoning) / Σ(duration_ms) × 1000`，剔除 TTFT 与工具执行耗时。
+- **PeakCtx**（会话/轮次峰值上下文）：单步最大 `input + cache_read + cache_write`，用于直观衡量上下文膨胀程度。
+
+### 本地时区分桶
+
+所有时间范围均采用本地时区半开区间 `[start_ms, end_ms)`：
+
+- `Hourly`：`YYYY-MM-DD HH:00`
+- `Daily`：`YYYY-MM-DD`
+- `Weekly`：ISO 周 `YYYY-Www`（周一为一周起点）
+- `Monthly`：`YYYY-MM`
+
+## 3. TUI 两段式梯度加载与刷新
+
+TUI 坚持**零磁盘缓存**，同时通过内存两段式加载兼顾首屏速度与完整历史：
+
+1. 启动时固定切分点 `cutoff_ms`（本地 30 天前 `00:00`）；
+2. **阶段 1（热窗）**：先扫 `[cutoff_ms, ∞)`（通常百毫秒级），立即推送 `is_partial = true` 快照点亮首屏；
+3. **阶段 2（冷窗）**：后台静默补扫 `[0, cutoff_ms)` 一次并常驻 worker 线程内存，与热窗无缝拼合推送全量快照；
+4. **阶段 3（60s 自动刷新 / 手动 `r`）**：仅重扫 30 天热窗再与内存冷窗合并，既快又不重计、不漏计。
+
+## 4. 新增数据源步骤
+
+1. 先调研目标 Agent 的本地存储路径、字段含义与去重口径，编写 `docs/<source>.md`；
+2. 在 `src/core/model.rs` 的 `Agent` 枚举中新增成员（TUI 的 `Session` 切换按钮与全量扫描会自动感知）；
+3. 在 `src/adapters/<source>.rs` 实现只读扫描器并在 `src/adapters/mod.rs` 注册；
+4. 在 `src/cli/mod.rs` 的 `AgentArg` / `SingleAgentArg` 补上 CLI 参数值；
+5. 如有新模型，在 `config/models.json` 中补充全小写定价条目与别名。

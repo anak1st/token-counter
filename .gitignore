@@ -1,43 +1,11 @@
 # Rust build output
 /target
 
-# dependencies (bun install)
-node_modules
-
-# agent session state
-.mimocode/
-
-# output
-out
-dist
-*.tgz
-
-# code coverage
-coverage
-*.lcov
-
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
-
-# dotenv environment variable files
-.env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
-
-# caches
-.eslintcache
-.cache
-*.tsbuildinfo
-# workspace-local bun cache / temp (BUN_INSTALL_CACHE_DIR / TMPDIR)
-.bun-cache/
+# Local temp & logs
 .tmp/
+*.log
 
-# IntelliJ based IDEs
-.idea
-
-# Finder (MacOS) folder config
+# IDE & OS
+.idea/
+.vscode/
 .DS_Store

@@ -58,10 +58,10 @@ file:~/.local/share/opencode/opencode.db?mode=ro
 }
 ```
 
-- **`tokens.input` 是未命中输入，不含 cache read** —— 与 zcode 相反，计价时**不需要**扣减
-- **`cost` 字段是美元，不采信**（见下），人民币费用一律走 `src/pricing.ts` 人民币价 × token 数
-- `type` 取值：`assistant`（用量主源）/ `user` / `synthetic` / `idle`（后三者无 tokens，过滤即可）
-- `model.variant` 是思考强度（`low` / `high` / `max`），不影响计价与分组（见 docs/thinking.md）
+- **`tokens.input` 是未命中输入，不含 cache read** —— 计价时**不需要**扣减
+- **`cost` 字段是网关美元价，不采信**（见下），费用一律走 `config/models.json` 官方美元价 × token 数
+- `type` 取值：`assistant`（用量主源）/ `user`（仅用于切分 Turn 边界）/ `synthetic` / `idle`（后两者无 tokens，过滤即可）
+- `model.variant` 是思考强度（`low` / `high` / `max`），不影响计价与分组
 
 ## 模型详细信息存哪（会话里没有）
 
@@ -72,7 +72,7 @@ file:~/.local/share/opencode/opencode.db?mode=ro
   `name`、`family`、`canonical_model_id`、`cost`（**美元**）、`limit`、`modalities`、`reasoning` 等
 - **`canonical_model_id` 是跨 provider 的全局身份**：如 `opencode-go/deepseek-v4.1-flash` 的
   `canonical_model_id = "deepseek/deepseek-v4.1-flash"`，与官方 `deepseek` provider 的 `deepseek-flash` 同源
-  （二者在 `pricing.ts` 里都归一到统一名 `deepseek-v4.1-flash`）
+  （二者在 `config/models.json` 里都归一到统一名 `deepseek-v4.1-flash`）
 - `opencode-go` / `opencode` 本身是**多模型网关**（catalog 里分别 37 / 122 个模型，
   涵盖 claude / gpt / gemini / deepseek / mimo / glm 等），所以**计价只认 `model.id`，不看 providerID**
 - `credential` 表存 provider 凭证（不读取）
@@ -82,14 +82,14 @@ file:~/.local/share/opencode/opencode.db?mode=ro
 1. **`tokens.input` 不含 `cache.read`**：用 cost 反推验证——对全部带 tokens 的 assistant 消息，
    `cost × 1e6 = input×0.15 + cache.read×0.003 + (output+reasoning)×0.6` **逐行精确成立**（误差 0），
    说明 input 就是未命中价基数、output 与 reasoning 互斥。
-2. **`cost` 是美元不采信**：拟合出的是 opencode-go 网关的美元价（见「模型与价格」），
-   按项目硬规则（不换汇、不采信源 cost）一律用 `pricing.ts` 结算。
+2. **`cost` 是网关美元价，不采信**：拟合出的是 opencode-go 网关的美元价（见「模型与价格」），
+   按项目硬规则一律用 `config/models.json` 官方美元价结算。
 3. **`session_v2` 的会话级汇总与消息求和不完全相等**（实测某会话 `tokens_input` 42679 vs 消息求和 42148，
    `tokens_output` 也略有出入，`tokens_cache_read` 相等），疑为汇总更新路径不同。
-   按 design §4.3 主源原则，**只读 `session_message`**，`session_v2` 不参与取数。
+   因此 **用量只读 `session_message`**，`session_v2` 仅用于读取人类可读会话标题 `title` 作为 `session_label`，不参与 token 聚合。
 4. **`finish='error'` 或 `data.error` 非空记 aborted**；空 `finish` 是进行中的消息（`streamed` / `completed` 可能缺失）。
 5. **`providerID` 是 opencode 的网关名**（如 `opencode-go`），不是模型厂商；计价按 `model.id` **平铺查价**，
-   `providerID` 不参与计价，只作分组键（组头 `provider · 模型`，见「模型与价格」）。
+   `providerID` 不参与计价，只作分组键（组头 `agent · provider · model`，见「模型与价格」）。
 6. **`session_message` 是会话内追加写的活数据**（当前会话本身也在其中），必须只读打开。
 
 ## 速度原料
@@ -111,28 +111,25 @@ file:~/.local/share/opencode/opencode.db?mode=ro
 |---|---|---|
 | `opencode-go` | `deepseek-v4.1-flash` | OpenCode Go 网关代理的 DeepSeek 模型 |
 | `opencode` | `deepseek-v4.1-flash-free` | 免费档，归一到 `deepseek-v4.1-flash` |
-| `opencode` | `glm-5.3-flash-free` | 免费档，归一到 `GLM-5.3-Flash` |
+| `opencode` | `glm-5.3-flash-free` | 免费档，归一到 `glm-5.3-flash` |
 
 - **网关美元价（仅参考，不采信）**：`opencode-go` 的该模型与 catalog 里官方 `deepseek` 条目**同价**
   （$0.15 / $0.6 / $0.003，reasoning 按 output 计；`opencode` 网关为其两倍）
-- **模型名归一**：`pricing.ts` 的 `identifyModel` 先匹配价目表的键、再走 aliases；免费档别名显式写在
+- **模型名归一**：`PricingCatalog::identify` 先统一转小写，先匹配价目表的键、再走 `aliases`；免费档别名显式写在
   对应模型的 `aliases` 里（`deepseek-v4.1-flash-free` 在 DeepSeek 条目、`glm-5.3-flash-free` 在 GLM 条目），
-  不做后缀推断，因此二者分别归一到 `deepseek-v4.1-flash`、`GLM-5.3-Flash`
-- **人民币结算**：按统一名平铺查 `pricing.ts`，DeepSeek 命中 `deepseek` 分组下的 `deepseek-v4.1-flash`
-  （未命中 **¥2** / 命中 **¥0.04** / 输出 **¥8** per 1M）；`deepseek-flash`、`deepseek-v4-flash` 等历史名已在 aliases 里归一到它
-- 免费档与付费档合并为同一模型组，费用仍按该模型的人民币刊例价估算（当前不单独记 ¥0）
-- 人民币刊例价与源美元价**不是汇率换算**（约为其 13.3 倍，含高峰价口径），此处统一按人民币刊例价折算
+  不做后缀推断，因此二者分别归一到 `deepseek-v4.1-flash`、`glm-5.3-flash`
+- **美元结算**：按统一名平铺查 `config/models.json`，统一使用官方美元标准价结算（不采信网关源 cost，免费档与付费档合并展示并按标准价估算）
 - 归一后仍查不到价的 model id 不出表格，只在输出末尾一行列出
 
 ## 数据覆盖
 
 - 库于本机 **2026-10-14** 首次创建（`migration` 表时间戳即创建时刻），**无历史数据**；查询更早日期会得到空结果
-- 只读 WAL 库经 `bun:sqlite`（`readonly: true`）实测可正常打开
+- 只读 WAL 库经 `rusqlite`（`SQLITE_OPEN_READ_ONLY`）实测可正常打开
 
 ## 验证过的查询
 
 ```sql
--- 各模型用量与源美元 cost（cost 仅参考，RMB 走 pricing.ts 另算）
+-- 各模型用量与源美元 cost（cost 仅参考，费用走 config/models.json 官方价另算）
 SELECT json_extract(data,'$.model.providerID')        AS provider,
        json_extract(data,'$.model.id')                AS model,
        count(*)                                       AS requests,
