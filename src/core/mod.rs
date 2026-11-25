@@ -2,5 +2,6 @@
 
 pub mod format;
 pub mod model;
+pub mod paths;
 pub mod pricing;
 pub mod time;

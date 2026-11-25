@@ -11,7 +11,6 @@
 //!   - 已关闭无 `-wal` 的库走 `file:<path>?immutable=1` 绕过缺少 `-shm` 的打开错误。
 
 use std::collections::HashMap;
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str;
@@ -24,6 +23,7 @@ use serde_json::from_str;
 use super::proto::{decode_wire, get_bytes, get_string, get_u64, parse_time_ms};
 use crate::core::format::{folder_name_from_path, non_empty_trimmed};
 use crate::core::model::{Agent, Usage, UsageEvent};
+use crate::core::paths::user_home_dir;
 use crate::core::pricing::{calc_cost_usd, PricingCatalog};
 use crate::core::time::TimeRange;
 
@@ -55,14 +55,14 @@ struct GenInfo {
     usage: Option<ParsedUsage>,
 }
 
-/// 返回 Antigravity 会话库默认目录：`~/.gemini/antigravity/conversations`。
+/// 返回 Antigravity 会话库默认目录：`~/.gemini/antigravity/conversations`（兼容 Windows `USERPROFILE`）。
 pub fn default_conversations_dir() -> Option<PathBuf> {
-    let home = env::var_os("HOME")?;
-    let mut path = PathBuf::from(home);
-    path.push(".gemini");
-    path.push("antigravity");
-    path.push("conversations");
-    Some(path)
+    Some(
+        user_home_dir()?
+            .join(".gemini")
+            .join("antigravity")
+            .join("conversations"),
+    )
 }
 
 /// 扫描默认目录下与 `[range.start_ms, range.end_ms)` 相交的全部会话库；目录不存在返回空列表。
@@ -161,7 +161,7 @@ fn open_readonly_sqlite(db_path: &Path) -> Result<Connection> {
         return Ok(Connection::open_with_flags(db_path, flags)?);
     }
 
-    let uri = format!("file:{}?immutable=1", encode_uri_path(db_path));
+    let uri = build_immutable_uri(db_path);
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_URI
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
@@ -251,9 +251,27 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// 构造跨平台 SQLite 只读 `immutable=1` URI（兼容 Unix 路径、Windows 盘符与 UNC 路径）。
+fn build_immutable_uri(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let encoded = encode_uri_chars(&normalized);
+
+    if encoded.starts_with("//") {
+        // UNC 路径 `\\server\share\...` -> `file://server/share/...`
+        format!("file:{}?immutable=1", encoded)
+    } else if encoded.starts_with('/') {
+        // Unix 绝对路径 `/Users/...` -> `file:///Users/...`
+        format!("file://{}?immutable=1", encoded)
+    } else if encoded.as_bytes().get(1) == Some(&b':') {
+        // Windows 盘符路径 `C:/Users/...` -> `file:///C:/Users/...`
+        format!("file:///{}?immutable=1", encoded)
+    } else {
+        format!("file:{}?immutable=1", encoded)
+    }
+}
+
 /// 对 SQLite `file:` URI 路径中的 `%`、`?`、`#` 做百分号编码。
-fn encode_uri_path(path: &Path) -> String {
-    let raw = path.to_string_lossy();
+fn encode_uri_chars(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
         match ch {
@@ -515,5 +533,39 @@ fn parse_gen_metadata(buf: &[u8]) -> GenInfo {
         ttft_ms,
         duration_ms,
         usage,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_cross_platform_sqlite_immutable_uris() {
+        assert_eq!(
+            build_immutable_uri(Path::new("/Users/me/a#1.db")),
+            "file:///Users/me/a%231.db?immutable=1"
+        );
+        assert_eq!(
+            build_immutable_uri(Path::new(r"C:\Users\me\a%b?c.db")),
+            "file:///C:/Users/me/a%25b%3Fc.db?immutable=1"
+        );
+        assert_eq!(
+            build_immutable_uri(Path::new(r"\\server\share\a.db")),
+            "file://server/share/a.db?immutable=1"
+        );
+    }
+
+    #[test]
+    fn parses_unix_and_windows_workspace_uris() {
+        assert_eq!(
+            parse_workspace_folder(r#"["file:///Users/me/Code/token-counter"]"#).as_deref(),
+            Some("token-counter")
+        );
+        assert_eq!(
+            parse_workspace_folder(r#"["file:///c%3A/Users/me/Code/my%20app"]"#).as_deref(),
+            Some("my app")
+        );
+        assert_eq!(parse_workspace_folder(""), None);
     }
 }

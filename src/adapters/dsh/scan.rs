@@ -17,6 +17,7 @@ use super::decode::parse_event_line;
 use super::parser::SessionParser;
 use crate::adapters::ScanQuery;
 use crate::core::model::UsageEvent;
+use crate::core::paths::user_home_dir;
 use crate::core::pricing::PricingCatalog;
 use crate::core::time::TimeRange;
 
@@ -36,17 +37,11 @@ struct CandidateFile {
 pub fn default_sessions_dir() -> Option<PathBuf> {
     if let Some(dsh_home) = env::var_os("DSH_HOME") {
         if !dsh_home.is_empty() {
-            let mut path = PathBuf::from(dsh_home);
-            path.push("sessions");
-            return Some(path);
+            return Some(PathBuf::from(dsh_home).join("sessions"));
         }
     }
 
-    let home = env::var_os("HOME")?;
-    let mut path = PathBuf::from(home);
-    path.push(".dsh");
-    path.push("sessions");
-    Some(path)
+    Some(user_home_dir()?.join(".dsh").join("sessions"))
 }
 
 /// 统一查询入口：按 `ScanQuery` 执行最合适的剪枝与并行扫描策略。

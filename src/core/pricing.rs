@@ -6,7 +6,6 @@
 //! - 全部价格单位为「美元 / 百万 token」；`cache_write` 按 `input_cache_miss` 计价，`reasoning` 按 `output` 计价。
 
 use std::collections::{BTreeMap, HashMap};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -15,6 +14,7 @@ use serde::Deserialize;
 use serde_json::from_str;
 
 use crate::core::model::Usage;
+use crate::core::paths::user_config_dirs;
 
 /// 编译期嵌入的默认 `config/models.json`，保证零配置即可运行。
 const DEFAULT_MODELS_JSON: &str = include_str!("../../config/models.json");
@@ -99,7 +99,7 @@ impl PricingCatalog {
 
     /// 按优先级加载价目表：
     /// 1. 显式传入的文件路径
-    /// 2. `~/.config/token-counter/models.json`（若存在）
+    /// 2. 用户配置目录（`~/.config/token-counter/models.json` 或 `%APPDATA%\token-counter\models.json`）
     /// 3. 编译期内嵌的默认 `config/models.json`
     pub fn resolve(explicit_path: Option<&Path>) -> Result<(Self, CatalogSource)> {
         if let Some(path) = explicit_path {
@@ -107,7 +107,8 @@ impl PricingCatalog {
             return Ok((catalog, CatalogSource::File(path.to_path_buf())));
         }
 
-        if let Some(user_path) = default_user_models_path() {
+        for dir in user_config_dirs() {
+            let user_path = dir.join("token-counter").join("models.json");
             if user_path.is_file() {
                 let catalog = Self::load_from_file(&user_path)?;
                 return Ok((catalog, CatalogSource::File(user_path)));
@@ -239,16 +240,6 @@ pub fn calc_cost_usd(pricing: &ModelPricing, usage: &Usage) -> f64 {
         + hit_tokens * pricing.input_cache_hit
         + out_tokens * pricing.output)
         / 1_000_000.0
-}
-
-/// 默认用户级覆盖路径：`~/.config/token-counter/models.json`。
-fn default_user_models_path() -> Option<PathBuf> {
-    let home = env::var_os("HOME")?;
-    let mut path = PathBuf::from(home);
-    path.push(".config");
-    path.push("token-counter");
-    path.push("models.json");
-    Some(path)
 }
 
 /// 校验标识非空、无首尾空白且严格全小写。

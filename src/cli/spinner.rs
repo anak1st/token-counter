@@ -1,15 +1,20 @@
-//! 单次 CLI 的轻量级终端加载动画（零外部依赖）。
+//! 单次 CLI 的轻量级终端加载动画（借助 `crossterm` 兼容 Unix 与 Windows 控制台）。
 //!
 //! 特点：
 //! - 仅在 `stderr` 为交互式终端（TTY）时渲染，重定向到文件或管道时自动静默；
 //! - 附带实时读秒（`0.1s` 精度），延迟首帧避免极快查询闪屏；
 //! - 使用 `Condvar` 通知退出，查询结束时毫秒级唤醒，绝不拖慢快查询；
-//! - 结束（或提前 `Drop`）时用 `\r\x1b[2K` 擦除当前行且不换行，使后续输出直接从同一行覆盖开始。
+//! - 结束（或提前 `Drop`）时用终端控制清行且不换行，使后续输出直接从同一行覆盖开始。
 
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+use crossterm::cursor::MoveToColumn;
+use crossterm::execute;
+use crossterm::style::Print;
+use crossterm::terminal::{Clear, ClearType};
 
 /// Braille 旋转动画帧序列。
 const FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -68,8 +73,7 @@ impl Spinner {
         let rendered = handle.join().unwrap_or(false);
         if rendered {
             let mut stderr = io::stderr().lock();
-            let _ = write!(stderr, "\r\x1b[2K");
-            let _ = stderr.flush();
+            let _ = execute!(stderr, MoveToColumn(0), Clear(ClearType::CurrentLine));
         }
     }
 }
@@ -108,8 +112,12 @@ fn run_loop(state: Arc<(Mutex<bool>, Condvar)>, message: &'static str) -> bool {
 
         {
             let mut stderr = io::stderr().lock();
-            let _ = write!(stderr, "\r\x1b[2K{} {} {:.1}s", frame, message, elapsed);
-            let _ = stderr.flush();
+            let _ = execute!(
+                stderr,
+                MoveToColumn(0),
+                Clear(ClearType::CurrentLine),
+                Print(format!("{} {} {:.1}s", frame, message, elapsed))
+            );
         }
         rendered = true;
 

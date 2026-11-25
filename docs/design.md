@@ -34,6 +34,7 @@ src/
 ├── core/
 │   ├── mod.rs                # 模块索引
 │   ├── model.rs              # Agent 枚举、Usage 与归一化 UsageEvent
+│   ├── paths.rs              # 跨平台用户目录解析（兼容 HOME / USERPROFILE / AppData）
 │   ├── pricing.rs            # config/models.json 加载、全小写校验、USD 计价
 │   ├── time.rs               # jiff 本地时区时间窗与 Hour/Day/Week/Month 分桶
 │   └── format.rs             # CLI 与 TUI 共用的数值、费用、耗时、路径与 CJK 截断格式化
@@ -127,6 +128,15 @@ TUI 坚持**零磁盘缓存**，同时通过内存梯度加载兼顾首屏速度
 2. **阶段 1（首屏 30 天）**：先扫 `[initial_cutoff_ms, ∞)`（通常百毫秒级），立即推送 `is_partial = true` 快照点亮首屏与 30 天柱状图；
 3. **阶段 2（历史补全）**：后台静默补扫 `[0, initial_cutoff_ms)` 一次并合并推送全量快照，随后将 `ts_ms < refresh_cutoff_ms` 的所有历史事件冻结驻留 worker 线程内存；
 4. **阶段 3（60s 自动刷新 / 手动 `r`）**：仅重扫今日 `[refresh_cutoff_ms, ∞)`（1 天窗口）再与内存冻结历史合并，既极快又不重计、不漏计。
+
+### 跨平台兼容约定（macOS / Linux / Windows）
+
+- **用户目录解析**：集中由 `src/core/paths.rs` 处理：
+  - 主目录依次读取 `HOME`（macOS / Linux）与 `USERPROFILE`（Windows）；
+  - 配置目录依次检查 `$XDG_CONFIG_HOME`、`~/.config` 与 `%APPDATA%`；
+  - 数据目录依次检查 `$XDG_DATA_HOME`、`~/.local/share`、`%LOCALAPPDATA%` 与 `%APPDATA%`。
+- **Linux 与 macOS**：统一遵循 POSIX + XDG 路径规范，`jiff` 直接读取系统时区，`rusqlite` 采用 `bundled` 内嵌编译，不依赖宿主机的 `libsqlite3`。
+- **Windows**：通过 MSVC 工具链编译；`agy` 只读 `immutable=1` 打开将 `\` 转为 `/` 并生成 `file:///C:/...?immutable=1`（兼容盘符与 UNC 路径）；`cli/spinner.rs` 通过 `crossterm` 清行以兼容传统 Windows 控制台。
 
 ## 4. 新增数据源步骤
 

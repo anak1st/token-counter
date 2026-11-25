@@ -7,7 +7,6 @@
 //! - `duration_ms`：`time.streamed` 减去首个 reasoning part 的 `time.created`（纯解码窗口，不含工具执行）。
 
 use std::collections::HashMap;
-use std::env;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -17,6 +16,7 @@ use serde_json::from_str;
 use super::decode::{build_event, MessageData};
 use crate::core::format::{folder_name_from_path, non_empty_trimmed};
 use crate::core::model::UsageEvent;
+use crate::core::paths::{first_existing_or_default, user_data_dirs};
 use crate::core::pricing::PricingCatalog;
 use crate::core::time::TimeRange;
 
@@ -27,15 +27,13 @@ struct SessionMeta {
     folder: Option<String>,
 }
 
-/// 返回 OpenCode SQLite 默认路径：`~/.local/share/opencode/opencode.db`。
+/// 返回 OpenCode SQLite 默认路径（兼容 XDG 与 Windows `LOCALAPPDATA` / `APPDATA`）。
 pub fn default_db_path() -> Option<PathBuf> {
-    let home = env::var_os("HOME")?;
-    let mut path = PathBuf::from(home);
-    path.push(".local");
-    path.push("share");
-    path.push("opencode");
-    path.push("opencode.db");
-    Some(path)
+    let candidates = user_data_dirs()
+        .into_iter()
+        .map(|dir| dir.join("opencode").join("opencode.db"))
+        .collect();
+    first_existing_or_default(candidates)
 }
 
 /// 扫描默认 OpenCode 数据库在 `[range.start_ms, range.end_ms)` 内的请求事件；库不存在时返回空列表。

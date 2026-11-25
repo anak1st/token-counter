@@ -4,21 +4,25 @@
 
 ## 支持的数据源
 
-| Agent | 标识 | 本地数据路径 | 格式 | 调研文档 |
+| Agent | 标识 | 本地数据路径（自动兼容 macOS / Linux / Windows） | 格式 | 调研文档 |
 |---|---|---|---|---|
-| OpenCode | `opencode` | `~/.local/share/opencode/opencode.db` | SQLite（WAL 只读） | [docs/opencode.md](docs/opencode.md) |
-| DeepSeek Harness | `dsh` | `~/.dsh/sessions/**/session.v4.jsonl.zstd`（支持 `$DSH_HOME`） | zstd JSONL（仅 v4） | [docs/dsh.md](docs/dsh.md) |
-| Antigravity | `agy` | `~/.gemini/antigravity/conversations/*.db` | SQLite + Protobuf | [docs/agy.md](docs/agy.md) |
+| OpenCode | `opencode` | `~/.local/share/opencode/opencode.db`（支持 `$XDG_DATA_HOME` 与 Windows `%LOCALAPPDATA%` / `%APPDATA%`） | SQLite（WAL 只读） | [docs/opencode.md](docs/opencode.md) |
+| DeepSeek Harness | `dsh` | `~/.dsh/sessions/**/session.v4.jsonl.zstd`（支持 `$DSH_HOME` 与 `%USERPROFILE%`） | zstd JSONL（仅 v4） | [docs/dsh.md](docs/dsh.md) |
+| Antigravity | `agy` | `~/.gemini/antigravity/conversations/*.db`（兼容 `%USERPROFILE%`） | SQLite + Protobuf | [docs/agy.md](docs/agy.md) |
 
-## 构建与安装
+## 跨平台支持与构建安装
 
-需要 Rust 1.85+ 工具链：
+目标支持 **macOS**、**Linux** 与 **Windows** 三大平台，核心依赖均为纯 Rust 或内嵌 C 源码编译（`rusqlite` bundled 模式），**无需系统额外安装 SQLite 动态库**：
+
+- **macOS**：Rust 1.85+ 与 Xcode Command Line Tools
+- **Linux**：Rust 1.85+ 与 C 编译器（`gcc` 或 `clang`，供内嵌 SQLite 与 zstd 编译）
+- **Windows**：Rust 1.85+（`x86_64-pc-windows-msvc` / `aarch64-pc-windows-msvc`）与 Visual Studio Build Tools（MSVC）
 
 ```bash
 # 编译 release 二进制
 cargo build --release
 
-# 可选：安装到 ~/.cargo/bin
+# 可选：安装到 Cargo bin 目录
 cargo install --path .
 
 # 运行单元测试
@@ -44,7 +48,7 @@ token-counter tui
 | `Day` | 按天倒序汇总 + 下方选中日期的模型明细 |
 | `Week` | 按 ISO 周倒序汇总 + 下方选中周的模型明细 |
 | `Month` | 按月倒序汇总 + 下方选中月份的模型明细 |
-| `Session` | 上半区会话列表（倒序，共用全局 Agent 筛选含 `all`）+ 下半区选中会话的逐个 Turn 明细（升序） |
+| `Session` | 上半区会话列表（倒序，ID / Name / Folder 分列，展示 Turns，共用全局 Agent 筛选含 `all`）+ 下半区选中会话的逐个 Turn 明细（倒序，含 Steps 与多模型） |
 
 ### 梯度刷新机制
 
@@ -104,7 +108,7 @@ token-counter --help
 ### 价目表配置
 
 - 默认内置官方美元价目表位于 [config/models.json](config/models.json)（编译期嵌入二进制），所有模型键名与 `aliases` 均为全小写。
-- 如需自定义或补充新模型价格，可创建 `~/.config/token-counter/models.json` 覆盖内置配置；未命中的模型会在报表末尾或 TUI 状态栏提示。
+- 如需自定义或补充新模型价格，可创建 `~/.config/token-counter/models.json`（支持 `$XDG_CONFIG_HOME`，Windows 下同时支持 `%USERPROFILE%\.config\token-counter\models.json` 与 `%APPDATA%\token-counter\models.json`）覆盖内置配置；未命中的模型会在报表末尾或 TUI 状态栏提示。
 
 ## 文档索引
 
