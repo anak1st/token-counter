@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEventKind};
 use crossterm::execute;
+use ratatui::{self, DefaultTerminal};
 use token_counter::core::model::UsageEvent;
 use token_counter::core::pricing::PricingCatalog;
 use token_counter::core::time::TimeRange;
@@ -50,14 +51,14 @@ pub fn run(catalog: PricingCatalog) -> Result<()> {
 }
 
 /// 主事件与渲染循环。
-fn run_event_loop(terminal: &mut ratatui::DefaultTerminal, catalog: PricingCatalog) -> Result<()> {
+fn run_event_loop(terminal: &mut DefaultTerminal, catalog: PricingCatalog) -> Result<()> {
     let (cmd_tx, cmd_rx) = mpsc::channel::<WorkerCmd>();
     let (msg_tx, msg_rx) = mpsc::channel::<WorkerMsg>();
 
     // 启动后台两段式加载与 60s 定时刷新线程
-    let _worker = thread::Builder::new()
+    thread::Builder::new()
         .name("tc-tui-loader".to_string())
-        .spawn(move || background_worker(catalog, cmd_rx, msg_tx));
+        .spawn(move || background_worker(catalog, cmd_rx, msg_tx))?;
 
     let mut app = App::new();
 

@@ -13,9 +13,9 @@
           ▼  src/adapters/（统一 ScanQuery 剪枝）
      Vec<UsageEvent>  ← 入口即完成模型名归一 + 官方美元计价（src/core/pricing.rs）
           │
-          ├──► src/report/aggregate.rs + render.rs  ──► 单次 CLI 纯文本报表
-          ├──► src/report/session.rs                ──► 单次 CLI 会话 / Turn 查询
-          └──► src/tui/                             ──► Ratatui 交互式 TUI 面板
+          ├──► src/stats/（内存聚合：aggregate / session）
+          │      ├──► src/cli/（纯文本报表与会话查询）
+          │      └──► src/tui/（Ratatui 交互式 TUI 面板）
 ```
 
 ### 目录结构
@@ -29,8 +29,8 @@ docs/
 ├── dsh.md                    # dsh 数据源调研（仅 v4）
 └── agy.md                    # agy（Antigravity）数据源调研
 src/
-├── main.rs                   # 薄入口：CLI 解析分发 / 启动 TUI
-├── lib.rs                    # 核心库导出（core / adapters / report）
+├── main.rs                   # 薄路由入口：解析命令行并分发到 tui::run 或 cli::run
+├── lib.rs                    # 无界面核心库导出（core / adapters / stats）
 ├── core/
 │   ├── mod.rs                # 模块索引
 │   ├── model.rs              # Agent 枚举、Usage 与归一化 UsageEvent
@@ -53,15 +53,16 @@ src/
 │       ├── mod.rs            # 模块索引
 │       ├── proto.rs          # 零依赖 Protobuf wire 解码器
 │       └── scan.rs           # agy SQLite（WAL / immutable）与摘要库元信息扫描
-├── report/
+├── stats/
 │   ├── mod.rs                # 模块索引
 │   ├── aggregate.rs          # 按 (agent, provider, model, bucket) 聚合
-│   ├── render.rs             # 纯空格对齐时间维度报表（无边框、无 ANSI 颜色）
-│   ├── session.rs            # 会话列表、跨 Agent 前缀匹配与 Turn 级聚合（CLI/TUI 共用）
-│   └── session_render.rs     # 单次 CLI 会话列表与 Turn 明细纯文本渲染
+│   └── session.rs            # 会话列表、跨 Agent 前缀匹配与 Turn 级聚合（CLI/TUI 共用）
 ├── cli/
-│   ├── mod.rs                # 模块索引
+│   ├── mod.rs                # 模块索引（导出 Cli / Command / run）
 │   ├── args.rs               # Clap 子命令定义（全英文 help，统一 AgentArg 默认 all）
+│   ├── runner.rs             # 单次 CLI 子命令调度（hourly / daily / weekly / monthly / session）
+│   ├── report_render.rs      # 纯空格对齐时间维度报表（无边框、无 ANSI 颜色）
+│   ├── session_render.rs     # 单次 CLI 会话列表与 Turn 明细纯文本渲染
 │   └── spinner.rs            # 零依赖 TTY 读秒加载动画（完成后同行覆盖）
 └── tui/
     ├── mod.rs                # 模块索引

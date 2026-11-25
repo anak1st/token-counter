@@ -209,7 +209,7 @@ pub fn aggregate(events: &[UsageEvent], granularity: Granularity) -> Report {
     let mut groups = Vec::with_capacity(grouped.len());
     let mut overall_by_bucket: BTreeMap<String, BucketRow> = BTreeMap::new();
 
-    for ((_agent_id, provider, model), (agent, pricing, bucket_map)) in grouped {
+    for ((_, provider, model), (agent, pricing, bucket_map)) in grouped {
         let mut rows = Vec::with_capacity(bucket_map.len());
         let mut total = BucketRow::empty("Total");
 
@@ -236,7 +236,7 @@ pub fn aggregate(events: &[UsageEvent], granularity: Granularity) -> Report {
 
     let mut overall_rows = Vec::with_capacity(overall_by_bucket.len());
     let mut overall_total = BucketRow::empty("Total");
-    for (_label, row) in overall_by_bucket {
+    for row in overall_by_bucket.into_values() {
         overall_total.fold(&row);
         overall_rows.push(row);
     }

@@ -6,8 +6,8 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use token_counter::core::model::Agent;
-use token_counter::report::aggregate::BucketRow;
-use token_counter::report::session::{SessionDetail, SessionSummary, TurnSummary};
+use token_counter::stats::aggregate::BucketRow;
+use token_counter::stats::session::{SessionDetail, SessionSummary, TurnSummary};
 
 use super::render;
 use super::style::{format_axis_tokens, nice_axis_ceil};

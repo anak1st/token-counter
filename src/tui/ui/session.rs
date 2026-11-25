@@ -15,7 +15,7 @@ use token_counter::core::format::{
     format_ttft, short_id, truncate_width,
 };
 use token_counter::core::time::format_datetime;
-use token_counter::report::session::{SessionDetail, TurnSummary};
+use token_counter::stats::session::{SessionDetail, TurnSummary};
 use unicode_width::UnicodeWidthStr;
 
 use super::models_panel::TABLE_COL_SPACING;

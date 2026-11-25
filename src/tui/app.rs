@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use ratatui::layout::Rect;
 use ratatui::widgets::TableState;
 use token_counter::core::model::Agent;
-use token_counter::report::session::SessionDetail;
+use token_counter::stats::session::SessionDetail;
 
 use super::data::{ModelRow, PeriodData, TuiSnapshot, ViewSnapshot};
 

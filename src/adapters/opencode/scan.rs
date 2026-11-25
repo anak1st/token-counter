@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OpenFlags};
+use serde_json::from_str;
 
 use super::decode::{build_event, MessageData};
 use crate::core::format::{folder_name_from_path, non_empty_trimmed};
@@ -88,7 +89,7 @@ pub fn scan_path(
             continue;
         }
 
-        let data: MessageData = match serde_json::from_str(&raw_data) {
+        let data: MessageData = match from_str(&raw_data) {
             Ok(parsed) => parsed,
             Err(_) => continue,
         };

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use serde_json::from_str;
 
 use crate::core::model::Usage;
 
@@ -119,7 +120,7 @@ impl PricingCatalog {
 
     /// 解析并严格校验 `models.json` 内容（全小写、合法单价、无冲突别名）。
     pub fn load_from_str(json: &str) -> Result<Self> {
-        let parsed: ModelsFile = serde_json::from_str(json)?;
+        let parsed: ModelsFile = from_str(json)?;
         if parsed.version != SUPPORTED_SCHEMA_VERSION {
             bail!(
                 "unsupported models.json version {} (expected {})",

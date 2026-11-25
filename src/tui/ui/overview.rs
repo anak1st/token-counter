@@ -14,7 +14,7 @@ use ratatui::widgets::{Paragraph, TableState};
 use ratatui::Frame;
 use token_counter::core::format::{format_cost, format_int, format_tokens_m};
 use token_counter::core::model::Agent;
-use token_counter::report::aggregate::BucketRow;
+use token_counter::stats::aggregate::BucketRow;
 
 use super::models_panel;
 use super::style::{

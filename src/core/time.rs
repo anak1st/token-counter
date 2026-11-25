@@ -187,10 +187,11 @@ pub fn bucket_key_in_tz(ts_ms: i64, granularity: Granularity, tz: &TimeZone) -> 
 mod tests {
     use super::*;
     use jiff::civil;
+    use jiff::tz;
 
     fn sample_now() -> ZonedDateTime {
         // 2026-11-23 16:45:30 +08:00（周一）
-        let tz = TimeZone::fixed(jiff::tz::offset(8));
+        let tz = TimeZone::fixed(tz::offset(8));
         civil::date(2026, 11, 23)
             .at(16, 45, 30, 0)
             .to_zoned_datetime(tz)
@@ -199,7 +200,7 @@ mod tests {
 
     #[test]
     fn bucket_keys_format_all_granularities() {
-        let tz = TimeZone::fixed(jiff::tz::offset(8));
+        let tz = TimeZone::fixed(tz::offset(8));
         let now = sample_now();
         let ms = now.timestamp().as_millisecond();
 
@@ -214,7 +215,7 @@ mod tests {
 
     #[test]
     fn last_n_computes_exact_calendar_boundaries() {
-        let tz = TimeZone::fixed(jiff::tz::offset(8));
+        let tz = TimeZone::fixed(tz::offset(8));
         let now = sample_now();
 
         // 最近 7 天：2026-11-17 00:00 .. 2026-11-24 00:00

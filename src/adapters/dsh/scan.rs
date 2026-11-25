@@ -11,6 +11,7 @@ use std::thread;
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
+use zstd::stream::read::Decoder;
 
 use super::decode::parse_event_line;
 use super::parser::SessionParser;
@@ -270,7 +271,7 @@ pub fn scan_file(
     catalog: &PricingCatalog,
 ) -> Result<Vec<UsageEvent>> {
     let file = File::open(path)?;
-    let decoder = zstd::stream::read::Decoder::new(BufReader::new(file))?;
+    let decoder = Decoder::new(BufReader::new(file))?;
     let mut reader = BufReader::with_capacity(DECODE_BUF_BYTES, decoder);
 
     let mut parser = SessionParser::new(fallback_session.to_string());

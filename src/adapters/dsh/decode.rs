@@ -3,7 +3,10 @@
 //! 通过字节预过滤只对关心的事件执行 serde 反序列化，90%+ 无关行不进 JSON 解析器，
 //! 命中行自动跳过 `data.message` 等大字段。
 
+use std::str;
+
 use serde::Deserialize;
+use serde_json::from_str;
 
 use crate::core::model::Usage;
 
@@ -179,7 +182,7 @@ fn peek_event_type(line: &str) -> Option<&str> {
     if i >= bytes.len() || bytes[i] != b'"' {
         return None;
     }
-    std::str::from_utf8(&bytes[start..i]).ok()
+    str::from_utf8(&bytes[start..i]).ok()
 }
 
 /// 将单行 JSONL 解码为语义清晰的 `DshEvent`；不关心的事件或格式异常行返回 `None`。
@@ -188,7 +191,7 @@ pub(super) fn parse_event_line(line: &str) -> Option<DshEvent> {
 
     match kind {
         "session" => {
-            let raw: RawSession = serde_json::from_str(line).ok()?;
+            let raw: RawSession = from_str(line).ok()?;
             Some(DshEvent::Session {
                 id: raw.id,
                 cwd: raw.cwd,
@@ -196,12 +199,12 @@ pub(super) fn parse_event_line(line: &str) -> Option<DshEvent> {
             })
         }
         "session/title" => {
-            let raw: RawSessionTitle = serde_json::from_str(line).ok()?;
+            let raw: RawSessionTitle = from_str(line).ok()?;
             let title = raw.data.and_then(|d| d.title);
             Some(DshEvent::SessionTitle { title })
         }
         "request/context" => {
-            let raw: RawRequestContext = serde_json::from_str(line).ok()?;
+            let raw: RawRequestContext = from_str(line).ok()?;
             let data = raw.data?;
             Some(DshEvent::Route {
                 provider: data.provider,
@@ -209,7 +212,7 @@ pub(super) fn parse_event_line(line: &str) -> Option<DshEvent> {
             })
         }
         "request/header" => {
-            let raw: RawRequestHeader = serde_json::from_str(line).ok()?;
+            let raw: RawRequestHeader = from_str(line).ok()?;
             let cfg = raw.data?.header?.config?;
             Some(DshEvent::Route {
                 provider: cfg.provider,
@@ -217,21 +220,21 @@ pub(super) fn parse_event_line(line: &str) -> Option<DshEvent> {
             })
         }
         "step/start" => {
-            let raw: RawStepStart = serde_json::from_str(line).ok()?;
+            let raw: RawStepStart = from_str(line).ok()?;
             let ts_ms = raw.time?;
             let data = raw.data?;
             let key = (data.turn?, data.step?);
             Some(DshEvent::StepStart { key, ts_ms })
         }
         "turn/end" => {
-            let raw: RawTurnEnd = serde_json::from_str(line).ok()?;
+            let raw: RawTurnEnd = from_str(line).ok()?;
             let data = raw.data?;
             let turn = data.turn?;
             let aborted = data.reason.and_then(|r| r.kind).as_deref() == Some("aborted");
             Some(DshEvent::TurnEnd { turn, aborted })
         }
         "assistant/message" => {
-            let raw: RawAssistantMessage = serde_json::from_str(line).ok()?;
+            let raw: RawAssistantMessage = from_str(line).ok()?;
             let ts_ms = raw.time?;
             let data = raw.data?;
             let u = data.usage?;

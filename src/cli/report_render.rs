@@ -5,9 +5,11 @@
 //! - 总计表与所有分组表共用同一套 6 列宽度，保证整段输出纵向对齐。
 //! - 费用统一以美元结算并展示（`$0.123`）。
 
-use crate::core::format::{format_cost, format_int, format_percent, format_speed, format_ttft};
-use crate::core::pricing::ModelPricing;
-use crate::report::aggregate::{BucketRow, ModelGroup, Report};
+use token_counter::core::format::{
+    format_cost, format_int, format_percent, format_speed, format_ttft,
+};
+use token_counter::core::pricing::ModelPricing;
+use token_counter::stats::aggregate::{BucketRow, ModelGroup, Report};
 
 /// 6 列的右对齐标志：`[时间桶, Tokens, Cache%, Cost, TTFT, Speed]`。
 const RIGHT_ALIGN: [bool; 6] = [false, true, true, true, true, true];

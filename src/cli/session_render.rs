@@ -2,12 +2,12 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::core::format::{
+use token_counter::core::format::{
     format_compact_tokens, format_cost, format_int, format_percent, format_span, format_speed,
     format_ttft, short_id, truncate_width,
 };
-use crate::core::time::format_datetime;
-use crate::report::session::{SessionDetail, SessionSummary};
+use token_counter::core::time::format_datetime;
+use token_counter::stats::session::{SessionDetail, SessionSummary};
 
 /// 渲染纯文本对齐的会话列表（最多展示 `limit` 条）。
 pub fn render_session_list(sessions: &[SessionSummary], limit: usize) -> String {

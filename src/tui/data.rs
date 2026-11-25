@@ -16,8 +16,8 @@ use token_counter::adapters;
 use token_counter::core::model::{Agent, UsageEvent};
 use token_counter::core::pricing::PricingCatalog;
 use token_counter::core::time::{Granularity, TimeRange};
-use token_counter::report::aggregate::{self, BucketRow, Report};
-use token_counter::report::session::{self, SessionDetail};
+use token_counter::stats::aggregate::{self, BucketRow, Report};
+use token_counter::stats::session::{self, SessionDetail};
 
 /// 启动首屏快速扫描天数（快速点亮首屏后再后台补全更早历史）。
 pub const INITIAL_WINDOW_DAYS: u32 = 30;

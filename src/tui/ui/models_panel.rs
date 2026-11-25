@@ -12,7 +12,7 @@ use ratatui::Frame;
 use token_counter::core::format::{
     format_cost, format_int, format_percent, format_speed, format_tokens_m, format_ttft,
 };
-use token_counter::report::aggregate::BucketRow;
+use token_counter::stats::aggregate::BucketRow;
 
 use super::style::{
     highlight_style, model_color, panel_block, render_scrollbar, table_header_style,

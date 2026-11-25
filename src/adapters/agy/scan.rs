@@ -14,10 +14,12 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str;
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
 use rusqlite::{params, Connection, OpenFlags};
+use serde_json::from_str;
 
 use super::proto::{decode_wire, get_bytes, get_string, get_u64, parse_time_ms};
 use crate::core::format::{folder_name_from_path, non_empty_trimmed};
@@ -216,7 +218,7 @@ fn parse_workspace_folder(raw: &str) -> Option<String> {
     if trimmed.is_empty() {
         return None;
     }
-    let uris: Vec<String> = serde_json::from_str(trimmed).ok()?;
+    let uris: Vec<String> = from_str(trimmed).ok()?;
     for uri in uris {
         if let Some(path) = uri.strip_prefix("file://") {
             let decoded = percent_decode(path);
@@ -235,7 +237,7 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0usize;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(hex) = std::str::from_utf8(&bytes[i + 1..i + 3]) {
+            if let Ok(hex) = str::from_utf8(&bytes[i + 1..i + 3]) {
                 if let Ok(val) = u8::from_str_radix(hex, 16) {
                     out.push(val);
                     i += 3;
