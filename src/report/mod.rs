@@ -3,3 +3,4 @@
 pub mod aggregate;
 pub mod render;
 pub mod session;
+pub mod session_render;

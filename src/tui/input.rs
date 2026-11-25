@@ -3,7 +3,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
-use super::{scroll_table, ActiveModal, App, ChartMode, FocusPane, KeyAction, Tab};
+use super::app::{scroll_table, ActiveModal, App, ChartMode, FocusPane, KeyAction, Tab};
 
 impl App {
     /// 处理单次键盘事件。

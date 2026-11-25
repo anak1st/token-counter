@@ -60,7 +60,7 @@ dsh 自己维护的**会话级聚合缓存**，与会话目录一一对应（本
 
 > **adapter 只解析 v4**（`*.v4.jsonl.zstd`，唯一仍在写入的格式）；旧格式与 v3 在扫描入口**静默跳过**——不解析、不告警。需要 v4 之前的历史数据时，legacy 描述仅作格式存档参考。v4 最早始于 2026-09-28。
 
-首行是会话元数据：`{"type":"session","version":4,"id":"...","createdAt":...,"cwd":"~/Code/my-project",...}` —— **`cwd` 就是项目维度**。
+首行是会话元数据：`{"type":"session","version":4,"id":"...","createdAt":...,"cwd":"~/Code/my-project",...}` —— **`cwd` 末级目录名作为 `folder`**；会话名称来自流中的 `session/title` 事件（`data.title`，后续 LLM 生成的标题会覆盖早期 fallback 标题，作为 `session_name`）。
 
 ### 旧格式（`session.jsonl.zstd`）
 

@@ -2,12 +2,12 @@
 
 use unicode_width::UnicodeWidthStr;
 
-use super::{SessionDetail, SessionSummary};
 use crate::core::format::{
     format_compact_tokens, format_cost, format_int, format_percent, format_span, format_speed,
     format_ttft, short_id, truncate_width,
 };
 use crate::core::time::format_datetime;
+use crate::report::session::{SessionDetail, SessionSummary};
 
 /// 渲染纯文本对齐的会话列表（最多展示 `limit` 条）。
 pub fn render_session_list(sessions: &[SessionSummary], limit: usize) -> String {
@@ -19,27 +19,30 @@ pub fn render_session_list(sessions: &[SessionSummary], limit: usize) -> String 
     let shown = &sessions[..slice_len];
 
     let headers = [
-        "Time", "Agent", "Session", "Label", "Model", "Turns", "Steps", "PeakCtx", "Tokens",
-        "Cache%", "Cost", "TTFT", "Speed",
+        "Time", "Agent", "Session", "Name", "Folder", "Turns", "PeakCtx", "Tokens", "Cache%",
+        "Cost", "TTFT", "Speed",
     ];
     let right_align = [
-        false, false, false, false, false, true, true, true, true, true, true, true, true,
+        false, false, false, false, false, true, true, true, true, true, true, true,
     ];
 
     let mut rows: Vec<Vec<String>> = Vec::with_capacity(shown.len());
     for s in shown {
-        let label = match s.label.as_deref() {
-            Some(text) => truncate_width(text, 20),
+        let name = match s.name.as_deref() {
+            Some(text) => truncate_width(text, 30),
+            None => "—".to_string(),
+        };
+        let folder = match s.folder.as_deref() {
+            Some(text) => truncate_width(text, 22),
             None => "—".to_string(),
         };
         rows.push(vec![
             format_datetime(s.last_ts_ms),
             s.agent.id().to_string(),
             short_id(&s.session_id, 12),
-            label,
-            format_models_cell(&s.models),
+            name,
+            folder,
             s.turns.to_string(),
-            s.steps.to_string(),
             format_compact_tokens(s.peak_ctx),
             format_int(s.total_tokens()),
             format_percent(s.cache_percent()),
@@ -59,8 +62,11 @@ pub fn render_session_detail(detail: &SessionDetail) -> String {
 
     lines.push(format!("agent    {}", s.agent.id()));
     lines.push(format!("session  {}", s.session_id));
-    if let Some(ref label) = s.label {
-        lines.push(format!("label    {}", label));
+    if let Some(ref name) = s.name {
+        lines.push(format!("name     {}", name));
+    }
+    if let Some(ref folder) = s.folder {
+        lines.push(format!("folder   {}", folder));
     }
     lines.push(format!(
         "window   {} .. {} ({})",
@@ -172,11 +178,11 @@ fn join_cells(cells: &[String], widths: &[usize], right_align: &[bool]) -> Strin
     parts.join("  ").trim_end().to_string()
 }
 
-/// 格式化模型列：单模型直接显示，多模型显示 `主模型 +N`。
+/// 格式化 Turn 模型列：无模型显示 `unknown`，多模型按逗号展开。
 fn format_models_cell(models: &[String]) -> String {
-    match models.len() {
-        0 => "unknown".to_string(),
-        1 => truncate_width(&models[0], 24),
-        n => format!("{} +{}", truncate_width(&models[0], 20), n - 1),
+    if models.is_empty() {
+        "unknown".to_string()
+    } else {
+        truncate_width(&models.join(", "), 36)
     }
 }

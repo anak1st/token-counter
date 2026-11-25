@@ -3,6 +3,8 @@
 //! 集中维护数值、费用、速度、耗时与宽字符截断逻辑，确保单次纯文本报表与交互式 TUI
 //! 的展示口径严格一致且不重复实现。
 
+use std::path::Path;
+
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// 千分位逗号整数格式化（如 `138,557,002`）。
@@ -99,6 +101,22 @@ pub fn short_id(id: &str, max_chars: usize) -> String {
     } else {
         chars[..max_chars].iter().collect()
     }
+}
+
+/// 去除首尾空白；若为空白串则返回 `None`。
+pub fn non_empty_trimmed(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// 从工作目录路径提取末级目录名（如 `/Users/me/Code/app` -> `app`）。
+pub fn folder_name_from_path(raw: &str) -> Option<String> {
+    let name = Path::new(raw.trim()).file_name()?.to_str()?;
+    non_empty_trimmed(name)
 }
 
 /// 按终端显示宽度截断过长文本并补省略号，防止中英文混排撑破列宽。

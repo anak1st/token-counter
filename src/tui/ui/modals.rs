@@ -1,8 +1,4 @@
-//! 全局 Agent 筛选弹窗（支持滚动，可平滑扩展至任意数量的 Agent）。
-//!
-//! 全部 6 个视图（含 `Session`）统一共用此弹窗：
-//! - 首行固定为 `all · All Agents`，其后依次列出所有内置 Agent；
-//! - 每行附带当前已加载的 `Sessions / Tokens / Cost` 汇总，便于一眼对比各 Agent 用量。
+//! TUI 居中弹窗组件（Agent 筛选弹窗与未知模型列表弹窗）。
 
 use ratatui::layout::{Constraint, Rect};
 use ratatui::style::{Color, Style};
@@ -18,11 +14,12 @@ use super::style::{
 };
 use crate::tui::app::{App, TableHit};
 
-/// 弹窗最大宽度（兼容中英文与右侧 3 列数值）。
-const MODAL_MAX_WIDTH: u16 = 68;
+/// 弹窗最大宽度。
+const AGENT_MODAL_MAX_WIDTH: u16 = 68;
+const UNKNOWN_MODAL_MAX_WIDTH: u16 = 66;
 
 /// 渲染居中的 Agent 选择弹窗（覆盖在主视图之上），返回弹窗热区。
-pub fn render(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> {
+pub fn render_agent_picker(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> {
     if area.width < 28 || area.height < 7 {
         return None;
     }
@@ -35,10 +32,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> 
     // 高度自适应：上下边框(2) + 表头(1) + 选项行数，并限制在终端高度内以支持滚动
     let desired_height = (options.len() as u16).saturating_add(3);
     let modal_height = desired_height.min(area.height.saturating_sub(4)).max(5);
-    let modal_width = MODAL_MAX_WIDTH.min(area.width.saturating_sub(4));
+    let modal_width = AGENT_MODAL_MAX_WIDTH.min(area.width.saturating_sub(4));
     let modal_area = centered_rect(modal_width, modal_height, area);
 
-    // 清空弹窗区域底层文字，防止背景表格透出
     frame.render_widget(Clear, modal_area);
 
     let footer_hint = " ↑/↓ select · Enter confirm · Esc cancel ";
@@ -56,8 +52,8 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> 
     .style(table_header_style());
 
     let mut w_sessions = "Sessions".len();
-    let mut w_tokens = 7usize; // 覆盖 `<0.001M` 与 `99.999M`，更大时动态扩宽
-    let mut w_cost = 7usize; // 覆盖 `$99.999`，更大时动态扩宽
+    let mut w_tokens = 7usize;
+    let mut w_cost = 7usize;
 
     let mut rows: Vec<Row> = Vec::with_capacity(options.len());
     for &opt in &options {
@@ -125,6 +121,54 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> 
         options.len(),
         app.modal_table.selected(),
     );
+
+    Some(TableHit {
+        panel: modal_area,
+        rows: Some(table_rows_rect(inner)),
+    })
+}
+
+/// 渲染居中的未知模型弹窗，返回弹窗热区（点击外区自动关闭）。
+pub fn render_unknown_models(frame: &mut Frame, app: &mut App, area: Rect) -> Option<TableHit> {
+    if area.width < 28 || area.height < 7 {
+        return None;
+    }
+
+    let items: Vec<String> = app
+        .active_view()
+        .map(|v| v.unknown_models.clone())
+        .unwrap_or_default();
+    if items.is_empty() {
+        return None;
+    }
+
+    let desired_height = (items.len() as u16).saturating_add(3);
+    let modal_height = desired_height.min(area.height.saturating_sub(4)).max(5);
+    let modal_width = UNKNOWN_MODAL_MAX_WIDTH.min(area.width.saturating_sub(4));
+    let modal_area = centered_rect(modal_width, modal_height, area);
+
+    frame.render_widget(Clear, modal_area);
+
+    let title = format!("Unknown Models ({})", items.len());
+    let footer_hint = " ~/.config/token-counter/models.json · Esc close ";
+    let block = panel_block(&title, true).title_bottom(
+        Line::from(Span::styled(footer_hint, Style::default().fg(Color::DarkGray))).centered(),
+    );
+    let inner = block.inner(modal_area);
+
+    let header = Row::new([Cell::from("Model (agent · provider · model)")]).style(table_header_style());
+    let rows: Vec<Row> = items
+        .iter()
+        .map(|name| Row::new([Cell::from(name.as_str())]))
+        .collect();
+
+    let table = Table::new(rows, [Constraint::Min(20)])
+        .header(header)
+        .block(block)
+        .row_highlight_style(highlight_style());
+
+    frame.render_stateful_widget(table, modal_area, &mut app.modal_table);
+    render_scrollbar(frame, modal_area, inner, items.len(), app.modal_table.selected());
 
     Some(TableHit {
         panel: modal_area,

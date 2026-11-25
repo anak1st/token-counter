@@ -32,41 +32,53 @@ src/
 ├── main.rs                   # 薄入口：CLI 解析分发 / 启动 TUI
 ├── lib.rs                    # 核心库导出（core / adapters / report）
 ├── core/
+│   ├── mod.rs                # 模块索引
 │   ├── model.rs              # Agent 枚举、Usage 与归一化 UsageEvent
 │   ├── pricing.rs            # config/models.json 加载、全小写校验、USD 计价
 │   ├── time.rs               # jiff 本地时区时间窗与 Hour/Day/Week/Month 分桶
-│   └── format.rs             # CLI 与 TUI 共用的数值、费用、耗时与 CJK 截断格式化
+│   └── format.rs             # CLI 与 TUI 共用的数值、费用、耗时、路径与 CJK 截断格式化
 ├── adapters/
-│   ├── mod.rs                # ScanQuery 与 std::thread::scope 多 Agent 并行分发
-│   ├── opencode.rs           # opencode SQLite 只读解析与 Turn 切分
-│   ├── dsh.rs                # dsh v4 三层并行解析（字节预筛 + 类型化 + thread::scope）
+│   ├── mod.rs                # 模块索引与公共导出
+│   ├── scan.rs               # ScanQuery 与 std::thread::scope 多 Agent 并行分发
+│   ├── opencode/
+│   │   ├── mod.rs            # 模块索引
+│   │   ├── decode.rs         # session_message.data 反序列化与事件构造
+│   │   └── scan.rs           # opencode SQLite 只读查询与 session_v2 元信息加载
+│   ├── dsh/
+│   │   ├── mod.rs            # 模块索引
+│   │   ├── decode.rs         # dsh v4 字节预筛与强类型 JSONL 解码
+│   │   ├── parser.rs         # 单会话纯状态机（路由、fork 去重、标题与中止回填）
+│   │   └── scan.rs           # 候选文件剪枝与 thread::scope 多核并行解压
 │   └── agy/
-│       ├── mod.rs            # agy SQLite（WAL / immutable）与事件映射
-│       └── proto.rs          # 零依赖 Protobuf wire 解码器
+│       ├── mod.rs            # 模块索引
+│       ├── proto.rs          # 零依赖 Protobuf wire 解码器
+│       └── scan.rs           # agy SQLite（WAL / immutable）与摘要库元信息扫描
 ├── report/
+│   ├── mod.rs                # 模块索引
 │   ├── aggregate.rs          # 按 (agent, provider, model, bucket) 聚合
 │   ├── render.rs             # 纯空格对齐时间维度报表（无边框、无 ANSI 颜色）
-│   └── session/
-│       ├── mod.rs            # 会话列表、跨 Agent 前缀匹配与 Turn 级聚合（CLI/TUI 共用）
-│       └── render.rs         # 单次 CLI 会话列表与 Turn 明细纯文本渲染
+│   ├── session.rs            # 会话列表、跨 Agent 前缀匹配与 Turn 级聚合（CLI/TUI 共用）
+│   └── session_render.rs     # 单次 CLI 会话列表与 Turn 明细纯文本渲染
 ├── cli/
-│   ├── mod.rs                # Clap 子命令定义（全英文 help，统一 AgentArg 默认 all）
+│   ├── mod.rs                # 模块索引
+│   ├── args.rs               # Clap 子命令定义（全英文 help，统一 AgentArg 默认 all）
 │   └── spinner.rs            # 零依赖 TTY 读秒加载动画（完成后同行覆盖）
 └── tui/
-    ├── mod.rs                # 终端生命周期（含鼠标捕获）与梯度 60s 后台刷新线程
+    ├── mod.rs                # 模块索引
+    ├── runner.rs             # 终端生命周期（含鼠标捕获）与梯度 60s 后台刷新线程
     ├── data.rs               # TuiSnapshot 多视角预聚合（All + 按 Agent）
-    ├── app/
-    │   ├── mod.rs            # 6 个 Tab 状态、全局筛选、双表焦点与滚动裁剪
-    │   └── input.rs          # 键盘与鼠标点击/悬停滚轮事件分发
+    ├── app.rs                # 6 个 Tab 状态、全局筛选、双表焦点与滚动裁剪
+    ├── input.rs              # 键盘与鼠标点击/悬停滚轮事件分发
     └── ui/
-        ├── mod.rs            # 三段式顶层布局、顶栏框内 Agent 按钮与底栏状态
+        ├── mod.rs            # 模块索引
+        ├── shell.rs          # 三段式顶层布局、顶栏框内 Agent 按钮与底栏状态
         ├── style.rs          # 圆角边框、聚焦高亮、模型配色、滚动条与 1 位有效数字 Y 轴
-        ├── agent_picker.rs   # 可滚动居中 Agent 筛选弹窗（含 All 与各 Agent 汇总）
-        ├── unknown_modal.rs  # 精简未知模型弹窗（列出未命中价目表的 agent · provider · model）
+        ├── modals.rs         # 居中弹窗（Agent 筛选弹窗 + 未知模型弹窗）
         ├── overview.rs       # 精简全量 Summary + 可横向滚动对称柱状图 + 窗口联动 Models 面板
         ├── period.rs         # Hour / Day / Week / Month 通用上下联动双表
         ├── models_panel.rs   # 统一 Models 面板与跨表共享的右侧数值列宽
-        └── session.rs        # 会话列表（支持 All 与单 Agent）+ 逐个 Turns 明细
+        ├── session.rs        # 会话列表（ID/Name/Folder 分列、Turns）+ 逐个 Turns 明细
+        └── tests.rs          # TUI 渲染与交互集成测试
 ```
 
 ## 2. 归一化事件与指标口径
@@ -119,6 +131,6 @@ TUI 坚持**零磁盘缓存**，同时通过内存梯度加载兼顾首屏速度
 
 1. 先调研目标 Agent 的本地存储路径、字段含义与去重口径，编写 `docs/<source>.md`；
 2. 在 `src/core/model.rs` 的 `Agent` 枚举中新增成员（TUI 的 `Session` 切换按钮与全量扫描会自动感知）；
-3. 在 `src/adapters/<source>.rs` 实现只读扫描器并在 `src/adapters/mod.rs` 注册；
-4. 在 `src/cli/mod.rs` 的 `AgentArg` 补上 CLI 参数值（所有子命令共用）；
+3. 在 `src/adapters/<source>/` 实现只读扫描器并在 `src/adapters/mod.rs` 与 `src/adapters/scan.rs` 注册；
+4. 在 `src/cli/args.rs` 的 `AgentArg` 补上 CLI 参数值（所有子命令共用）；
 5. 如有新模型，在 `config/models.json` 中补充全小写定价条目与别名。

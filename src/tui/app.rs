@@ -5,8 +5,6 @@
 //! - 双表视图通过 `FocusPane` 统一管理上下框焦点与联动明细表滚动；
 //! - `UiLayout` 记录每帧渲染的热区，供鼠标点击与悬停滚轮精准命中。
 
-mod input;
-
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;

@@ -8,7 +8,7 @@ use clap::Parser;
 use token_counter::adapters::{self, ScanQuery};
 use token_counter::core::pricing::PricingCatalog;
 use token_counter::core::time::{Granularity, TimeRange};
-use token_counter::report::{aggregate, render, session};
+use token_counter::report::{aggregate, render, session, session_render};
 
 use crate::cli::spinner::Spinner;
 use crate::cli::{Cli, Command, ReportArgs, SessionArgs};
@@ -55,14 +55,14 @@ fn run_session(args: SessionArgs, catalog: &PricingCatalog) -> Result<()> {
             let query = ScanQuery::SessionPrefix(id_prefix.clone());
             let events = adapters::scan_agents_query(&agents, &query, catalog)?;
             let detail = session::find_session_detail(&events, id_prefix)?;
-            session::render_session_detail(&detail)
+            session_render::render_session_detail(&detail)
         }
         None => {
             let limit = args.last.unwrap_or(DEFAULT_SESSIONS);
             let query = ScanQuery::RecentSessions { limit };
             let events = adapters::scan_agents_query(&agents, &query, catalog)?;
             let list = session::summarize_sessions(&events);
-            session::render_session_list(&list, limit)
+            session_render::render_session_list(&list, limit)
         }
     };
     loading.stop();

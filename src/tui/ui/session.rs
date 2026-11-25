@@ -44,7 +44,8 @@ const MIN_COST_W: usize = 7; // "$99.999"
 struct SessionColWidths {
     time_w: u16,
     turn_w: u16,
-    session_model_w: u16,
+    session_id_w: u16,
+    folder_w: u16,
     turns_or_span_w: u16,
     steps_w: u16,
     peak_w: u16,
@@ -57,9 +58,11 @@ struct SessionColWidths {
 
 impl SessionColWidths {
     /// 仅按 `sessions` 全集计算列宽（有界列固定，无界列动态），确保切换选中会话时列宽零抖动。
-    fn measure(sessions: &[SessionDetail], wide: bool) -> Self {
-        let model_cap: usize = if wide { 24 } else { 18 };
-        let mut session_model_w = "Model".len();
+    fn measure(sessions: &[SessionDetail], show_agent_prefix: bool, wide: bool) -> Self {
+        let id_len = if wide { 12 } else { 8 };
+        let folder_cap: usize = if wide { 20 } else { 14 };
+        let mut session_id_w = "Session".len();
+        let mut folder_w = "Folder".len();
         let mut turn_w = FIXED_TURN_W;
         let mut turns_or_span_w = FIXED_TURNS_SPAN_W;
         let mut steps_w = FIXED_STEPS_W;
@@ -70,9 +73,19 @@ impl SessionColWidths {
 
         for item in sessions {
             let s = &item.summary;
-            let model_text = format_model_text(&s.models, model_cap.saturating_sub(2));
-            // `● ` 占 2 列显示宽度
-            session_model_w = session_model_w.max(UnicodeWidthStr::width(model_text.as_str()) + 2);
+            let short = short_id(&s.session_id, id_len);
+            let id_col_len = if show_agent_prefix {
+                s.agent.id().len() + 3 + short.len()
+            } else {
+                short.len()
+            };
+            session_id_w = session_id_w.max(id_col_len);
+
+            if let Some(ref folder) = s.folder {
+                let capped = truncate_width(folder, folder_cap);
+                folder_w = folder_w.max(UnicodeWidthStr::width(capped.as_str()));
+            }
+
             turn_w = turn_w.max(format!("#{}", s.turns).len());
             turns_or_span_w = turns_or_span_w.max(s.turns.to_string().len());
             steps_w = steps_w.max(s.steps.to_string().len());
@@ -85,7 +98,8 @@ impl SessionColWidths {
         Self {
             time_w: if wide { 16 } else { 11 },
             turn_w: turn_w as u16,
-            session_model_w: session_model_w.min(model_cap) as u16,
+            session_id_w: session_id_w as u16,
+            folder_w: folder_w.min(folder_cap) as u16,
             turns_or_span_w: turns_or_span_w as u16,
             steps_w: steps_w as u16,
             peak_w: FIXED_PEAK_CTX_W as u16,
@@ -97,15 +111,15 @@ impl SessionColWidths {
         }
     }
 
-    /// 上半区 `Sessions` 列宽：`Time` 靠左固定、`Session` 弹性吃剩余宽度、右侧数值块紧密对齐。
+    /// 上半区 `Sessions` 列宽：`Session`（ID）、`Name`（弹性名称）、`Folder`（独立文件夹）分列展示，仅保留 `Turns`（不显示 `Model` 与 `Steps`）。
     fn sessions_constraints(&self, wide: bool) -> Vec<Constraint> {
         if wide {
             vec![
                 Constraint::Length(self.time_w),
-                Constraint::Min(18),
-                Constraint::Length(self.session_model_w),
+                Constraint::Length(self.session_id_w),
+                Constraint::Min(14),
+                Constraint::Length(self.folder_w),
                 Constraint::Length(self.turns_or_span_w),
-                Constraint::Length(self.steps_w),
                 Constraint::Length(self.peak_w),
                 Constraint::Length(self.tokens_w),
                 Constraint::Length(self.cache_w),
@@ -116,10 +130,10 @@ impl SessionColWidths {
         } else {
             vec![
                 Constraint::Length(self.time_w),
-                Constraint::Min(14),
-                Constraint::Length(self.session_model_w),
+                Constraint::Length(self.session_id_w),
+                Constraint::Min(12),
+                Constraint::Length(self.folder_w),
                 Constraint::Length(self.turns_or_span_w),
-                Constraint::Length(self.steps_w),
                 Constraint::Length(self.tokens_w),
                 Constraint::Length(self.cost_w),
                 Constraint::Length(self.speed_w),
@@ -171,7 +185,7 @@ pub fn render(
     let (upper_area, lower_area) = split_upper_and_models(area);
     let wide = area.width >= WIDE_SESSION_THRESHOLD;
     let selected_detail = session_table.selected().and_then(|idx| sessions.get(idx));
-    let widths = SessionColWidths::measure(sessions, wide);
+    let widths = SessionColWidths::measure(sessions, show_agent_prefix, wide);
 
     let upper_hit = render_sessions_table(
         frame,
@@ -229,27 +243,33 @@ fn render_sessions_table(
     let inner = block.inner(area);
     let header = sessions_header(wide);
     let constraints = widths.sessions_constraints(wide);
-    let model_budget = widths.session_model_w.saturating_sub(2) as usize;
+    let id_len = if wide { 12 } else { 8 };
+    let folder_budget = widths.folder_w as usize;
 
     let mut rows: Vec<Row> = Vec::with_capacity(sessions.len());
     for detail in sessions {
         let s = &detail.summary;
-        let id_and_label = match s.label.as_deref() {
-            Some(label) => format!("{} · {}", short_id(&s.session_id, 8), label),
-            None => short_id(&s.session_id, 12),
-        };
+        let id_short = short_id(&s.session_id, id_len);
         let session_cell = if show_agent_prefix {
             Cell::from(Line::from(vec![
                 Span::styled(s.agent.id(), Style::default().fg(Color::DarkGray)),
                 Span::styled(" · ", Style::default().fg(Color::DarkGray)),
-                Span::raw(id_and_label),
+                Span::raw(id_short),
             ]))
         } else {
-            Cell::from(id_and_label)
+            Cell::from(id_short)
+        };
+
+        let name_cell = match s.name.as_deref() {
+            Some(name) => Cell::from(name.to_string()),
+            None => Cell::from("—").style(Style::default().fg(Color::DarkGray)),
+        };
+        let folder_cell = match s.folder.as_deref() {
+            Some(folder) => Cell::from(truncate_width(folder, folder_budget)),
+            None => Cell::from("—").style(Style::default().fg(Color::DarkGray)),
         };
 
         let time_text = format_table_time(s.last_ts_ms, wide);
-        let model_cell = format_model_cell(&s.models, model_budget);
         let cost_cell = Cell::from(Line::from(format_cost(s.cost_usd)).right_aligned())
             .style(Style::default().fg(Color::Green));
         let speed_cell = Cell::from(Line::from(format_speed(s.avg_speed_tps())).right_aligned())
@@ -259,9 +279,9 @@ fn render_sessions_table(
             rows.push(Row::new([
                 Cell::from(time_text).style(Style::default().fg(Color::DarkGray)),
                 session_cell,
-                model_cell,
+                name_cell,
+                folder_cell,
                 Cell::from(Line::from(s.turns.to_string()).right_aligned()),
-                Cell::from(Line::from(s.steps.to_string()).right_aligned()),
                 Cell::from(Line::from(format_compact_tokens(s.peak_ctx)).right_aligned()),
                 Cell::from(Line::from(format_tokens_m(s.total_tokens())).right_aligned()),
                 Cell::from(Line::from(format_percent(s.cache_percent())).right_aligned()),
@@ -273,9 +293,9 @@ fn render_sessions_table(
             rows.push(Row::new([
                 Cell::from(time_text).style(Style::default().fg(Color::DarkGray)),
                 session_cell,
-                model_cell,
+                name_cell,
+                folder_cell,
                 Cell::from(Line::from(s.turns.to_string()).right_aligned()),
-                Cell::from(Line::from(s.steps.to_string()).right_aligned()),
                 Cell::from(Line::from(format_tokens_m(s.total_tokens())).right_aligned()),
                 cost_cell,
                 speed_cell,
@@ -335,7 +355,8 @@ fn render_turns_table(
     } else {
         id_short
     };
-    let title = match s.label.as_deref() {
+    let title_meta = s.name.as_deref().or(s.folder.as_deref());
+    let title = match title_meta {
         Some(label) => format!(
             "Turns · {} · {} ({} turns)",
             prefix,
@@ -391,7 +412,7 @@ fn render_turns_table(
 fn build_turn_row(turn: &TurnSummary, wide: bool) -> Row<'static> {
     let turn_cell = Cell::from(Line::from(format!("#{}", turn.index)).right_aligned());
     let time_text = format_table_time(turn.first_ts_ms, wide);
-    let model_cell = format_model_cell(&turn.models, 36);
+    let model_cell = format_model_cell(&turn.models);
     let span_text = format_span(turn.span_secs());
     let cost_cell = Cell::from(Line::from(format_cost(turn.cost_usd)).right_aligned())
         .style(Style::default().fg(Color::Green));
@@ -431,9 +452,9 @@ fn sessions_header(wide: bool) -> Row<'static> {
         Row::new([
             Cell::from("Time"),
             Cell::from("Session"),
-            Cell::from("Model"),
+            Cell::from("Name"),
+            Cell::from("Folder"),
             Cell::from(Line::from("Turns").right_aligned()),
-            Cell::from(Line::from("Steps").right_aligned()),
             Cell::from(Line::from("PeakCtx").right_aligned()),
             Cell::from(Line::from("Tokens").right_aligned()),
             Cell::from(Line::from("Cache%").right_aligned()),
@@ -446,9 +467,9 @@ fn sessions_header(wide: bool) -> Row<'static> {
         Row::new([
             Cell::from("Time"),
             Cell::from("Session"),
-            Cell::from("Model"),
+            Cell::from("Name"),
+            Cell::from("Folder"),
             Cell::from(Line::from("Turns").right_aligned()),
-            Cell::from(Line::from("Steps").right_aligned()),
             Cell::from(Line::from("Tokens").right_aligned()),
             Cell::from(Line::from("Cost").right_aligned()),
             Cell::from(Line::from("Speed").right_aligned()),
@@ -488,35 +509,21 @@ fn turns_header(wide: bool) -> Row<'static> {
     }
 }
 
-/// 构造模型展示文本（不含圆点前缀，多模型时追加 `+N`）。
-fn format_model_text(models: &[String], max_name_width: usize) -> String {
-    let primary = match models.first() {
-        Some(m) => m.as_str(),
-        None => return "unknown".to_string(),
-    };
-
-    if models.len() > 1 {
-        let suffix = format!(" +{}", models.len() - 1);
-        let budget = max_name_width.saturating_sub(suffix.len());
-        format!("{}{}", truncate_width(primary, budget), suffix)
-    } else {
-        truncate_width(primary, max_name_width)
+/// 构造带彩色圆点的模型单元格（多模型按各自圆点串联展示，不折叠成 `+N`）。
+fn format_model_cell(models: &[String]) -> Cell<'static> {
+    if models.is_empty() {
+        return Cell::from("unknown").style(Style::default().fg(Color::DarkGray));
     }
-}
 
-/// 构造带彩色圆点的模型单元格。
-fn format_model_cell(models: &[String], max_name_width: usize) -> Cell<'static> {
-    let primary = match models.first() {
-        Some(m) => m.as_str(),
-        None => return Cell::from("unknown").style(Style::default().fg(Color::DarkGray)),
-    };
-    let color = model_color(primary);
-    let text = format_model_text(models, max_name_width);
-
-    Cell::from(Line::from(vec![
-        Span::styled("● ", Style::default().fg(color)),
-        Span::raw(text),
-    ]))
+    let mut spans: Vec<Span<'static>> = Vec::with_capacity(models.len() * 3);
+    for (idx, model) in models.iter().enumerate() {
+        if idx > 0 {
+            spans.push(Span::styled(", ", Style::default().fg(Color::DarkGray)));
+        }
+        spans.push(Span::styled("● ", Style::default().fg(model_color(model))));
+        spans.push(Span::raw(model.clone()));
+    }
+    Cell::from(Line::from(spans))
 }
 
 /// 按宽窄模式格式化本地时间戳（宽屏 `YYYY-MM-DD HH:MM`，窄屏 `MM-DD HH:MM`）。

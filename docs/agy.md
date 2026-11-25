@@ -18,7 +18,7 @@
 | 路径 | 内容 | 判断 |
 |---|---|---|
 | `~/.gemini/antigravity/brain/<id>/.system_generated/logs/transcript.jsonl` | 会话可读 JSONL 日志（`PLANNER_RESPONSE` 含 `model`、`input_tokens`、`cache_read_tokens`、`output_tokens`、`created_at`） | 与主库双视角，且**缺少 `reasoning` 拆分与亚秒级速度时间戳**，不取数 |
-| `~/.gemini/antigravity/conversation_summaries.db` | 会话列表与 FTS5 搜索索引 | 无 token 字段 |
+| `~/.gemini/antigravity/conversation_summaries.db` | 会话列表与 FTS5 搜索索引（含 `title` 与 `workspace_uris`） | 无 token 字段；仅只读提取会话标题 `title`（`session_name`）与工作区目录名 `workspace_uris`（`folder`） |
 | `~/.gemini/antigravity/annotations/*.pbtxt` | 标题与视图时间戳 | 无 token 字段 |
 | `~/Library/Application Support/Antigravity/` | Electron 壳缓存（Cookies/Cache/Preferences） | 无会话 token 数据 |
 

@@ -86,7 +86,7 @@ file:~/.local/share/opencode/opencode.db?mode=ro
    按项目硬规则一律用 `config/models.json` 官方美元价结算。
 3. **`session_v2` 的会话级汇总与消息求和不完全相等**（实测某会话 `tokens_input` 42679 vs 消息求和 42148，
    `tokens_output` 也略有出入，`tokens_cache_read` 相等），疑为汇总更新路径不同。
-   因此 **用量只读 `session_message`**，`session_v2` 仅用于读取人类可读会话标题 `title` 作为 `session_label`，不参与 token 聚合。
+   因此 **用量只读 `session_message`**，`session_v2` 仅用于读取会话标题 `title`（`session_name`）与工作目录 `directory` 末级名（`folder`），不参与 token 聚合。
 4. **`finish='error'` 或 `data.error` 非空记 aborted**；空 `finish` 是进行中的消息（`streamed` / `completed` 可能缺失）。
 5. **`providerID` 是 opencode 的网关名**（如 `opencode-go`），不是模型厂商；计价按 `model.id` **平铺查价**，
    `providerID` 不参与计价，只作分组键（组头 `agent · provider · model`，见「模型与价格」）。

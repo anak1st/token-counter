@@ -4,10 +4,6 @@
 //! - 会话列表：按最后活跃时间倒序展示完整对话；
 //! - 单会话详情：按 ID 前缀匹配唯一会话，或一次性按 Agent 聚合全量会话与按时间倒序排列（最新在最前）的 Turn 列表。
 
-mod render;
-
-pub use render::{render_session_detail, render_session_list};
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use anyhow::{bail, Result};
@@ -20,7 +16,10 @@ use crate::core::model::{Agent, UsageEvent};
 pub struct SessionSummary {
     pub agent: Agent,
     pub session_id: String,
-    pub label: Option<String>,
+    /// 可选的会话名称 / 标题。
+    pub name: Option<String>,
+    /// 可选的工作区文件夹名。
+    pub folder: Option<String>,
     pub first_ts_ms: i64,
     pub last_ts_ms: i64,
     /// 按总 token 降序排列的模型列表（首个为主模型）。
@@ -179,14 +178,16 @@ impl MetricsAcc {
         self,
         agent: Agent,
         session_id: String,
-        label: Option<String>,
+        name: Option<String>,
+        folder: Option<String>,
         turns: usize,
     ) -> SessionSummary {
         let models = self.sorted_models();
         SessionSummary {
             agent,
             session_id,
-            label,
+            name,
+            folder,
             first_ts_ms: self.first_ts_ms,
             last_ts_ms: self.last_ts_ms,
             models,
@@ -336,7 +337,8 @@ impl TurnSummary {
 pub fn summarize_sessions(events: &[UsageEvent]) -> Vec<SessionSummary> {
     struct SessionState {
         agent: Agent,
-        label: Option<String>,
+        name: Option<String>,
+        folder: Option<String>,
         turns: HashSet<String>,
         acc: MetricsAcc,
     }
@@ -347,13 +349,17 @@ pub fn summarize_sessions(events: &[UsageEvent]) -> Vec<SessionSummary> {
         let key = (event.agent.id(), event.session.clone());
         let state = by_session.entry(key).or_insert_with(|| SessionState {
             agent: event.agent,
-            label: event.session_label.clone(),
+            name: event.session_name.clone(),
+            folder: event.folder.clone(),
             turns: HashSet::new(),
             acc: MetricsAcc::new(event.ts_ms),
         });
 
-        if state.label.is_none() && event.session_label.is_some() {
-            state.label = event.session_label.clone();
+        if state.name.is_none() && event.session_name.is_some() {
+            state.name = event.session_name.clone();
+        }
+        if state.folder.is_none() && event.folder.is_some() {
+            state.folder = event.folder.clone();
         }
         let turn_key = event.turn.as_deref().unwrap_or("default");
         state.turns.insert(turn_key.to_string());
@@ -365,7 +371,8 @@ pub fn summarize_sessions(events: &[UsageEvent]) -> Vec<SessionSummary> {
         summaries.push(state.acc.into_session_summary(
             state.agent,
             session_id,
-            state.label,
+            state.name,
+            state.folder,
             state.turns.len(),
         ));
     }
@@ -386,7 +393,8 @@ pub fn summarize_sessions(events: &[UsageEvent]) -> Vec<SessionSummary> {
 /// 返回的会话按最后活跃时间倒序排列，每个会话内的 Turn 也按时间倒序排列（最新在最前，保留 `#1..#N` 原编号）。
 pub fn summarize_sessions_with_turns(events: &[UsageEvent], agent: Agent) -> Vec<SessionDetail> {
     struct SessionTurnsState {
-        label: Option<String>,
+        name: Option<String>,
+        folder: Option<String>,
         session_acc: MetricsAcc,
         by_turn: HashMap<String, MetricsAcc>,
     }
@@ -401,13 +409,17 @@ pub fn summarize_sessions_with_turns(events: &[UsageEvent], agent: Agent) -> Vec
         let state = by_session
             .entry(event.session.clone())
             .or_insert_with(|| SessionTurnsState {
-                label: event.session_label.clone(),
+                name: event.session_name.clone(),
+                folder: event.folder.clone(),
                 session_acc: MetricsAcc::new(event.ts_ms),
                 by_turn: HashMap::new(),
             });
 
-        if state.label.is_none() && event.session_label.is_some() {
-            state.label = event.session_label.clone();
+        if state.name.is_none() && event.session_name.is_some() {
+            state.name = event.session_name.clone();
+        }
+        if state.folder.is_none() && event.folder.is_some() {
+            state.folder = event.folder.clone();
         }
         state.session_acc.add(event);
 
@@ -422,10 +434,13 @@ pub fn summarize_sessions_with_turns(events: &[UsageEvent], agent: Agent) -> Vec
     let mut details = Vec::with_capacity(by_session.len());
     for (session_id, state) in by_session {
         let turns = finalize_turns(state.by_turn);
-        let summary =
-            state
-                .session_acc
-                .into_session_summary(agent, session_id, state.label, turns.len());
+        let summary = state.session_acc.into_session_summary(
+            agent,
+            session_id,
+            state.name,
+            state.folder,
+            turns.len(),
+        );
         details.push(SessionDetail { summary, turns });
     }
 
@@ -512,13 +527,17 @@ pub fn find_session_detail(events: &[UsageEvent], id_prefix: &str) -> Result<Ses
         bail!("session '{}' has no usage events", matched_id);
     }
 
-    let mut label: Option<String> = None;
+    let mut name: Option<String> = None;
+    let mut folder: Option<String> = None;
     let mut session_acc = MetricsAcc::new(session_events[0].ts_ms);
     let mut by_turn: HashMap<String, MetricsAcc> = HashMap::new();
 
     for event in &session_events {
-        if label.is_none() && event.session_label.is_some() {
-            label = event.session_label.clone();
+        if name.is_none() && event.session_name.is_some() {
+            name = event.session_name.clone();
+        }
+        if folder.is_none() && event.folder.is_some() {
+            folder = event.folder.clone();
         }
         session_acc.add(event);
 
@@ -530,7 +549,7 @@ pub fn find_session_detail(events: &[UsageEvent], id_prefix: &str) -> Result<Ses
     }
 
     let turns = finalize_turns(by_turn);
-    let summary = session_acc.into_session_summary(matched_agent, matched_id, label, turns.len());
+    let summary = session_acc.into_session_summary(matched_agent, matched_id, name, folder, turns.len());
 
     Ok(SessionDetail { summary, turns })
 }
@@ -544,7 +563,8 @@ mod tests {
         UsageEvent {
             agent: Agent::Dsh,
             session: session.to_string(),
-            session_label: Some("demo".to_string()),
+            session_name: Some("demo title".to_string()),
+            folder: Some("demo".to_string()),
             provider: Some("deepseek-official".to_string()),
             model: "deepseek-v4.1-flash".to_string(),
             ts_ms,

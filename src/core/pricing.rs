@@ -132,7 +132,8 @@ impl PricingCatalog {
         let mut raw_aliases: Vec<(String, String)> = Vec::new();
 
         for (key, entry) in parsed.models {
-            validate_lowercase_identifier(&key, "model key")?;
+            validate_lowercase_identifier(&key)
+                .with_context(|| format!("invalid model key '{}'", key))?;
 
             let vendor = entry.vendor.trim().to_string();
             if vendor.is_empty() {
@@ -142,12 +143,24 @@ impl PricingCatalog {
                 bail!("model '{}' vendor '{}' must be lowercase", key, vendor);
             }
 
-            validate_rate(entry.input_cache_miss, &key, "input_cache_miss")?;
-            validate_rate(entry.input_cache_hit, &key, "input_cache_hit")?;
-            validate_rate(entry.output, &key, "output")?;
+            for (field, rate) in [
+                ("input_cache_miss", entry.input_cache_miss),
+                ("input_cache_hit", entry.input_cache_hit),
+                ("output", entry.output),
+            ] {
+                if !rate.is_finite() || rate < 0.0 {
+                    bail!(
+                        "model '{}' {} rate must be finite and >= 0 (got {})",
+                        key,
+                        field,
+                        rate
+                    );
+                }
+            }
 
             for alias in entry.aliases {
-                validate_lowercase_identifier(&alias, &format!("alias of '{}'", key))?;
+                validate_lowercase_identifier(&alias)
+                    .with_context(|| format!("invalid alias '{}' of model '{}'", alias, key))?;
                 raw_aliases.push((alias, key.clone()));
             }
 
@@ -237,33 +250,19 @@ fn default_user_models_path() -> Option<PathBuf> {
     Some(path)
 }
 
-/// 校验规范键或别名非空、无首尾空白且严格全小写。
-fn validate_lowercase_identifier(value: &str, label: &str) -> Result<()> {
+/// 校验标识非空、无首尾空白且严格全小写。
+fn validate_lowercase_identifier(value: &str) -> Result<()> {
     if value.is_empty() {
-        bail!("{} must not be empty", label);
+        bail!("identifier must not be empty");
     }
     if value.trim() != value {
         bail!(
-            "{} '{}' must not have leading or trailing whitespace",
-            label,
+            "identifier '{}' must not have leading or trailing whitespace",
             value
         );
     }
     if value != value.to_ascii_lowercase() {
-        bail!("{} '{}' must be all lowercase", label, value);
-    }
-    Ok(())
-}
-
-/// 校验单价为有限非负数。
-fn validate_rate(rate: f64, model: &str, field: &str) -> Result<()> {
-    if !rate.is_finite() || rate < 0.0 {
-        bail!(
-            "model '{}' {} rate must be finite and >= 0 (got {})",
-            model,
-            field,
-            rate
-        );
+        bail!("identifier '{}' must be all lowercase", value);
     }
     Ok(())
 }
